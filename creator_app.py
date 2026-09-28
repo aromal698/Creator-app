@@ -17,6 +17,15 @@ from supabase import create_client
 
 
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other", "Cross-department"]
+THEMES = [
+    {"name": "White", "bg": "#f7faf8", "side": "#edf3ef", "surface": "#ffffff", "text": "#172b27", "accent": "#176b5b", "soft": "#e3f1e8", "border": "#d2e3d8"},
+    {"name": "Dark", "bg": "#101820", "side": "#17242d", "surface": "#1c2a34", "text": "#edf5f7", "accent": "#59c3a5", "soft": "#203a3b", "border": "#35515a"},
+    {"name": "Blue", "bg": "#f2f7ff", "side": "#e7effc", "surface": "#ffffff", "text": "#172b49", "accent": "#2563eb", "soft": "#dceaff", "border": "#c8d9f5"},
+    {"name": "Purple", "bg": "#f8f5ff", "side": "#eee8fb", "surface": "#ffffff", "text": "#302347", "accent": "#7650c8", "soft": "#eee5ff", "border": "#ddd0f5"},
+    {"name": "Amber", "bg": "#fffaf1", "side": "#f7eedc", "surface": "#ffffff", "text": "#3b2d17", "accent": "#bb6b0a", "soft": "#ffefcf", "border": "#efdbb4"},
+    {"name": "Rose", "bg": "#fff6f7", "side": "#f8e9ec", "surface": "#ffffff", "text": "#40252d", "accent": "#c13e68", "soft": "#ffe2e9", "border": "#f1cbd6"},
+    {"name": "Teal", "bg": "#f0fbfb", "side": "#e1f2f1", "surface": "#ffffff", "text": "#173537", "accent": "#078080", "soft": "#d7f2ef", "border": "#c0e3df"},
+]
 try:
     INDIA_TZ = ZoneInfo("Asia/Kolkata")
 except ZoneInfoNotFoundError:
@@ -33,12 +42,18 @@ def secret(name, default=None):
 
 
 def apply_theme():
-    dark_css = """
-    .stApp { background:#101a16 !important; color:#e7eee9; }
-    [data-testid="stSidebar"] { background:#17251f !important; }
-    h1,h2,h3,p,label,[data-testid="stMarkdownContainer"] { color:#e7eee9; }
-    [data-testid="stMetric"] { background:#1b2b23; border-color:#315542; }
-    """ if st.session_state.get("dark_theme") else ""
+    theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]
+    theme_css = f"""
+    .stApp {{ background:{theme['bg']} !important; color:{theme['text']} !important; }}
+    .stApp [data-testid="stSidebar"] {{ background:{theme['side']} !important; }}
+    .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp label,.stApp [data-testid="stMarkdownContainer"] {{ color:{theme['text']}; }}
+    .stApp .eyebrow {{ color:{theme['accent']} !important; }}
+    .stApp [data-testid="stMetric"],.stApp [data-testid="stVerticalBlockBorderWrapper"] > div {{ background:{theme['surface']}; border-color:{theme['border']}; color:{theme['text']}; }}
+    .stApp input,.stApp textarea {{ background:{theme['surface']}; color:{theme['text']}; }}
+    .stApp a {{ color:{theme['accent']}; }}
+    .stApp div.stButton > button {{ border-color:{theme['accent']}; color:{theme['accent']}; }}
+    .stApp div.stButton > button:hover {{ background:{theme['soft']}; }}
+    """
     st.markdown(
         """<style>
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap');
@@ -52,7 +67,7 @@ def apply_theme():
         .st-key-theme_bulb:before { content:''; position:absolute; top:0; left:50%; height:19px; border-left:2px solid #ae8d50; }
         .st-key-theme_bulb button { border-radius:50% 50% 45% 45%; width:48px; min-width:48px; height:48px; min-height:48px; padding:0; font-size:1.5rem; background:#fff7d9; border:2px solid #d6b66a; box-shadow:0 3px 12px #0003; }
         .st-key-theme_bulb button:hover { background:#ffe894; box-shadow:0 5px 18px #9b741b55; transform:translateY(2px); }
-        """ + dark_css + "</style>",
+        """ + theme_css + "</style>",
         unsafe_allow_html=True,
     )
 
@@ -66,7 +81,7 @@ def open_calendar_content():
 
 
 def toggle_theme():
-    st.session_state.dark_theme = not st.session_state.get("dark_theme", False)
+    st.session_state.theme_index = (int(st.session_state.get("theme_index", 0)) + 1) % len(THEMES)
 
 
 def creator_sign_out():
@@ -356,7 +371,8 @@ with heading:
     st.markdown("<div class='eyebrow'>CAMPUSCONNECT · PRIVATE ADMIN</div>", unsafe_allow_html=True)
     st.title(page)
 with bulb:
-    st.button("💡", key="theme_bulb", on_click=toggle_theme, help="Toggle light and dark theme")
+    current_theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]["name"]
+    st.button("💡", key="theme_bulb", on_click=toggle_theme, help=f"Current theme: {current_theme}. Click to cycle through all 7 themes.")
 if page != "Creator dashboard":
     st.button("← Back to creator dashboard", on_click=back_to_dashboard)
 
