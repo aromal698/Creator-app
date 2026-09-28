@@ -393,6 +393,21 @@ if not client or not auth_user:
     show_login()
     st.stop()
 
+try:
+    campus_settings = {
+        row["key"]: row["value"]
+        for row in (client.table("campus_settings").select("key,value").execute().data or [])
+    }
+except Exception:
+    # Backward compatible until the creator reruns the updated SQL schema.
+    campus_settings = {}
+
+
+def campus_setting(key, legacy_secret):
+    if key in campus_settings:
+        return str(campus_settings[key] or "").strip()
+    return str(secret(legacy_secret, "")).strip()
+
 st.session_state.setdefault("display_name", (getattr(auth_user, "user_metadata", {}) or {}).get("display_name", "Student"))
 st.session_state.setdefault("active_group_id", None)
 today = datetime.now(INDIA_TZ).date()
@@ -498,8 +513,8 @@ if page == "Home":
             else:
                 st.caption("No upcoming activities have been posted.")
             st.button("View campus calendar →", on_click=lambda: st.session_state.update(nav_page="Campus Calendar"))
-            community_url = str(secret("WHATSAPP_COMMUNITY_URL", "")).strip()
-            channel_url = str(secret("WHATSAPP_CHANNEL_URL", "")).strip()
+            community_url = campus_setting("whatsapp_community_url", "WHATSAPP_COMMUNITY_URL")
+            channel_url = campus_setting("whatsapp_channel_url", "WHATSAPP_CHANNEL_URL")
             if community_url.startswith("https://") or channel_url.startswith("https://"):
                 st.subheader("💬 WhatsApp campus spaces")
                 if community_url.startswith("https://"):
@@ -631,13 +646,13 @@ elif page == "Campus Calendar":
     except Exception:
         st.error("Campus calendar events could not be loaded. Check the Supabase connection.")
 
-    embed_url = str(secret("GOOGLE_CALENDAR_EMBED_URL", "")).strip()
+    embed_url = campus_setting("google_calendar_embed_url", "GOOGLE_CALENDAR_EMBED_URL")
     if embed_url.startswith("https://calendar.google.com/calendar/embed"):
         st.subheader("Google Calendar")
         components.iframe(embed_url, height=650, scrolling=True)
         st.caption("Google Calendar is public in this view. Do not include private student or staff information in that calendar.")
     else:
-        st.info("Optional: configure GOOGLE_CALENDAR_EMBED_URL in Streamlit Secrets to embed your public campus Google Calendar here.")
+        st.info("The campus creator can add the public Google Calendar embed link in Creator Studio → Campus links. Creator-published events are listed above.")
 
 elif page == "AI Search":
     st.caption("Ask a question that needs current web information. Free-tier Groq AI searches the web and provides sources when available.")
@@ -681,8 +696,8 @@ elif page == "AI Search":
 
 elif page == "WhatsApp":
     st.write("Join the campus WhatsApp spaces for announcements and community discussion. These open in WhatsApp; the links are managed by campus creators.")
-    community_url = str(secret("WHATSAPP_COMMUNITY_URL", "")).strip()
-    channel_url = str(secret("WHATSAPP_CHANNEL_URL", "")).strip()
+    community_url = campus_setting("whatsapp_community_url", "WHATSAPP_COMMUNITY_URL")
+    channel_url = campus_setting("whatsapp_channel_url", "WHATSAPP_CHANNEL_URL")
     left, right = st.columns(2)
     with left:
         if community_url.startswith("https://"):
