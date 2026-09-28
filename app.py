@@ -535,8 +535,10 @@ elif page == "AI Search":
                 try:
                     answer, sources = gemini_google_search(search_question.strip())
                     st.session_state.ai_search_result = {"question": search_question.strip(), "answer": answer, "sources": sources}
-                except Exception:
-                    st.error("Gemini Search could not respond. Check the API key, model, and Gemini usage limits.")
+                except Exception as exc:
+                    key = str(secret("GEMINI_API_KEY", ""))
+                    detail = str(exc).replace(key, "[hidden API key]") if key else str(exc)
+                    st.error(f"Gemini Search failed ({type(exc).__name__}). Details: {detail[:500]}")
     result = st.session_state.get("ai_search_result")
     if result:
         st.markdown(f"**Your question:** {result['question']}")
@@ -600,8 +602,10 @@ elif page == "AI Study Buddy":
                             contents=f"Recent conversation:\n{history}\nuser: {question}",
                         )
                         answer = response.text or "I couldn't generate a text response. Please try again."
-                except Exception:
-                    answer = "Gemini could not answer right now. Check its API key, model, and current usage limits."
+                except Exception as exc:
+                    key = str(secret("GEMINI_API_KEY", ""))
+                    detail = str(exc).replace(key, "[hidden API key]") if key else str(exc)
+                    answer = f"Gemini request failed ({type(exc).__name__}). Details: {detail[:500]}"
                 st.markdown(answer)
         chat.append({"role": "assistant", "content": answer})
 
