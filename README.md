@@ -7,7 +7,7 @@ A two-app Streamlit campus community for B.Tech students. Both apps use one Supa
 - `supabase_schema.sql` — shared tables, initial department and semester groups, and student access policies.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
 
-Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Gemini suggests wording and search answers; a creator reviews content before publishing. AI cannot guarantee factual accuracy.
+Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Groq free-tier AI helps with study explanations, web search, and creator drafts. A creator reviews content before publishing. AI cannot guarantee factual accuracy. Free access has usage limits, and all app users share the app owner's quota.
 
 ## 1. Create the shared database
 
@@ -47,7 +47,15 @@ Upload and commit these files to your repository root:
 
 Do **not** upload `.streamlit/secrets.toml`, API keys, database keys, or creator passwords. `.gitignore` hides the local `secrets.toml` from Git, but do not rely on that as your only safeguard: check carefully before committing.
 
-## 5. Deploy the student app
+## 5. Create a Groq API key (free plan)
+
+1. Create/sign in to a Groq account at [console.groq.com](https://console.groq.com/).
+2. Open [API Keys](https://console.groq.com/keys) and create a key for CampusConnect.
+3. Keep the account on its Free plan if you want to avoid usage charges. The free plan has limits; if the app's shared quota is used up, AI requests stop until the limit resets. Never commit the key to GitHub.
+
+The student and creator apps each need the same `GROQ_API_KEY` added separately to their own Streamlit Secrets.
+
+## 6. Deploy the student app
 
 1. Sign in at [Streamlit Community Cloud](https://share.streamlit.io/), select **Create app**, then choose your GitHub repository and branch.
 2. Set **Main file path** to `app.py`.
@@ -56,8 +64,8 @@ Do **not** upload `.streamlit/secrets.toml`, API keys, database keys, or creator
 ```toml
 SUPABASE_URL = "your-supabase-project-url"
 SUPABASE_ANON_KEY = "your-supabase-publishable-or-anon-key"
-GEMINI_API_KEY = "your-gemini-api-key"
-GEMINI_MODEL = "gemini-3.5-flash-lite"
+GROQ_API_KEY = "your-groq-api-key"
+GROQ_MODEL = "openai/gpt-oss-20b"
 GOOGLE_CALENDAR_EMBED_URL = "https://calendar.google.com/calendar/embed?src=your-public-calendar"
 WHATSAPP_COMMUNITY_URL = "https://chat.whatsapp.com/your-community-invite"
 WHATSAPP_CHANNEL_URL = "https://whatsapp.com/channel/your-channel"
@@ -65,7 +73,7 @@ WHATSAPP_CHANNEL_URL = "https://whatsapp.com/channel/your-channel"
 
 Replace all examples with your real settings. If you have not configured a calendar or WhatsApp link, omit that line. Click **Deploy**. Streamlit's docs show the entrypoint and secrets fields in the deploy workflow. [Deploy an app](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app).
 
-## 6. Deploy Creator Studio as another app
+## 7. Deploy Creator Studio as another app
 
 1. In Streamlit Community Cloud, choose **Create app** again.
 2. Select the same repository and branch, but set **Main file path** to `creator_app.py`.
@@ -76,8 +84,8 @@ SUPABASE_URL = "your-supabase-project-url"
 SUPABASE_SERVICE_ROLE_KEY = "your-supabase-secret-or-service-role-key"
 CAMPUS_CREATOR_PASSWORD = "choose-a-long-private-password"
 CAMPUS_CREATOR_NAME = "Campus Creator"
-GEMINI_API_KEY = "your-gemini-api-key"
-GEMINI_MODEL = "gemini-3.5-flash-lite"
+GROQ_API_KEY = "your-groq-api-key"
+GROQ_MODEL = "openai/gpt-oss-20b"
 ```
 
 The Creator Studio password is shared in this starter version. Anyone who has it can manage campus updates and groups. Keep the Creator Studio URL and password for authorized creators. The service-role key can bypass student row policies; never add it to the student app's secrets or GitHub. [Supabase API key safety](https://supabase.com/docs/guides/getting-started/api-keys).
@@ -87,7 +95,8 @@ The Creator Studio password is shared in this starter version. Anyone who has it
 - Students create an account, browse department/semester groups, and join. Joining opens that group's chat. Chats use message bubbles styled after WhatsApp; WhatsApp Community and Channel buttons open external links.
 - The student Home page shows today's date, today's activities, special-day items, important campus notices, recent notices, and upcoming activities.
 - **Campus Calendar** shows published event details by selected date, Google Calendar (if configured), and Add to Google Calendar links.
-- **AI Search** uses Gemini with Google Search grounding and displays source links when available. Grounding can improve currency and traceability but does not guarantee a fully accurate answer. Google Search grounding may use quota or incur charges under the Gemini API pricing rules; check the current pricing before sharing widely. [Gemini Search grounding](https://ai.google.dev/gemini-api/docs/google-search).
+- **AI Study Buddy, AI Search, and Creator Studio drafting** use Groq's `openai/gpt-oss-20b`; AI Search enables the built-in browser search tool. Search results and AI answers can still be incomplete or wrong. [Groq model and browser search docs](https://console.groq.com/docs/tool-use/built-in-tools/browser-search).
+- Groq's free plan is rate-limited. Because every student shares this app's API key, a public app can use up its free quota; check the current limits before sharing widely. [Groq rate limits](https://console.groq.com/docs/rate-limits).
 - Feedback is the final page in the student navigation. Every non-home page has a Back to home button.
 - The hanging bulb at top-right switches between light and dark themes.
 
