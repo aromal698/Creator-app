@@ -16,6 +16,15 @@ from supabase import create_client
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other"]
 SEMESTERS = list(range(1, 9))
 NAV_PAGES = ["Home", "Study Groups", "Group Chat", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "WhatsApp", "Feedback"]
+THEMES = [
+    {"name": "White", "bg": "#f7faf8", "side": "#edf3ef", "surface": "#ffffff", "text": "#172b27", "muted": "#526861", "accent": "#176b5b", "soft": "#e3f1e8", "border": "#d2e3d8", "hero1": "#e3f1e8", "hero2": "#f2f6ee"},
+    {"name": "Dark", "bg": "#101820", "side": "#17242d", "surface": "#1c2a34", "text": "#edf5f7", "muted": "#b3c4cb", "accent": "#59c3a5", "soft": "#203a3b", "border": "#35515a", "hero1": "#1b3a3b", "hero2": "#26384a"},
+    {"name": "Blue", "bg": "#f2f7ff", "side": "#e7effc", "surface": "#ffffff", "text": "#172b49", "muted": "#526987", "accent": "#2563eb", "soft": "#dceaff", "border": "#c8d9f5", "hero1": "#dceaff", "hero2": "#f0f5ff"},
+    {"name": "Purple", "bg": "#f8f5ff", "side": "#eee8fb", "surface": "#ffffff", "text": "#302347", "muted": "#706184", "accent": "#7650c8", "soft": "#eee5ff", "border": "#ddd0f5", "hero1": "#eee5ff", "hero2": "#f9f4ff"},
+    {"name": "Amber", "bg": "#fffaf1", "side": "#f7eedc", "surface": "#ffffff", "text": "#3b2d17", "muted": "#786343", "accent": "#bb6b0a", "soft": "#ffefcf", "border": "#efdbb4", "hero1": "#ffefcf", "hero2": "#fff9ee"},
+    {"name": "Rose", "bg": "#fff6f7", "side": "#f8e9ec", "surface": "#ffffff", "text": "#40252d", "muted": "#80616a", "accent": "#c13e68", "soft": "#ffe2e9", "border": "#f1cbd6", "hero1": "#ffe2e9", "hero2": "#fff5f7"},
+    {"name": "Teal", "bg": "#f0fbfb", "side": "#e1f2f1", "surface": "#ffffff", "text": "#173537", "muted": "#537174", "accent": "#078080", "soft": "#d7f2ef", "border": "#c0e3df", "hero1": "#d7f2ef", "hero2": "#f1fbf7"},
+]
 try:
     INDIA_TZ = ZoneInfo("Asia/Kolkata")
 except ZoneInfoNotFoundError:
@@ -118,7 +127,7 @@ def go_home():
 
 
 def toggle_theme():
-    st.session_state.dark_theme = not st.session_state.get("dark_theme", False)
+    st.session_state.theme_index = (int(st.session_state.get("theme_index", 0)) + 1) % len(THEMES)
 
 
 def go_to_chat(group_id):
@@ -308,16 +317,23 @@ def render_group_chat_messages(database, group_id, user_id, display_name):
 
 
 def apply_theme():
-    dark_css = """
-    .stApp { background:#101a16 !important; color:#e7eee9; }
-    [data-testid="stSidebar"] { background:#17251f !important; }
-    h1,h2,h3,p,label,[data-testid="stMarkdownContainer"] { color:#e7eee9; }
-    .hero,.date-card,.quote-card { background:#20392d; border-color:#315542; color:#e7eee9; }
-    .hero h2,.hero p { color:#e7eee9; }
-    .quote-text,.quote-note { color:#e7eee9 !important; }
-    [data-testid="stMetric"] { background:#1b2b23; border-color:#315542; }
-    .chat-other { background:#26342c; color:#e7eee9; }
-    """ if st.session_state.get("dark_theme") else ""
+    theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]
+    theme_css = f"""
+    .stApp {{ background:{theme['bg']} !important; color:{theme['text']} !important; }}
+    .stApp [data-testid="stSidebar"] {{ background:{theme['side']} !important; }}
+    .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp label,.stApp [data-testid="stMarkdownContainer"] {{ color:{theme['text']}; }}
+    .stApp .eyebrow,.stApp .quote-label {{ color:{theme['accent']} !important; }}
+    .stApp .hero {{ background:linear-gradient(120deg,{theme['hero1']},{theme['hero2']}); border-color:{theme['border']}; }}
+    .stApp .hero h2,.stApp .hero p,.stApp .date-card,.stApp .quote-card,.stApp .quote-text,.stApp .quote-note {{ color:{theme['text']} !important; }}
+    .stApp .date-card,.stApp .quote-card,.stApp .chat-header {{ background:{theme['soft']}; border-color:{theme['border']}; }}
+    .stApp [data-testid="stMetric"],.stApp [data-testid="stVerticalBlockBorderWrapper"] > div {{ background:{theme['surface']}; border-color:{theme['border']}; color:{theme['text']}; }}
+    .stApp input,.stApp textarea {{ background:{theme['surface']}; color:{theme['text']}; }}
+    .stApp a {{ color:{theme['accent']}; }}
+    .stApp div.stButton > button {{ border-color:{theme['accent']}; color:{theme['accent']}; }}
+    .stApp div.stButton > button:hover {{ background:{theme['soft']}; }}
+    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] {{ background:{theme['surface']}; border-color:{theme['border']}; color:{theme['text']}; }}
+    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {{ background:{theme['soft']}; border-color:{theme['accent']}; }}
+    """
     st.markdown(
         """<style>
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap');
@@ -353,7 +369,7 @@ def apply_theme():
         .st-key-theme_bulb:before { content:''; position:absolute; top:0; left:50%; height:19px; border-left:2px solid #ae8d50; }
         .st-key-theme_bulb button { border-radius:50% 50% 45% 45%; width:48px; min-width:48px; height:48px; min-height:48px; padding:0; font-size:1.5rem; background:#fff7d9; border:2px solid #d6b66a; box-shadow:0 3px 12px #0003; }
         .st-key-theme_bulb button:hover { background:#ffe894; box-shadow:0 5px 18px #9b741b55; transform:translateY(2px); }
-        """ + dark_css + "</style>",
+        """ + theme_css + "</style>",
         unsafe_allow_html=True,
     )
 
@@ -361,32 +377,32 @@ def apply_theme():
 def show_login():
     st.markdown("<div class='eyebrow'>STUDENT SIGN IN</div>", unsafe_allow_html=True)
     st.title("Welcome to CampusConnect")
-    st.write("Sign in or create a student account to join groups and chat. Use your college email if your campus requires it.")
+    st.write("First visit? Create your student account with your name, email, and a password. Next time, sign in with the same email and password.")
     if st.session_state.get("auth_notice"):
         st.info(st.session_state.pop("auth_notice"))
     if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
         st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
         return
-    st.subheader("Sign in")
-    with st.form("sign_in_form"):
+    st.subheader("Create your account")
+    with st.form("create_account_form"):
+        name = st.text_input("Your name")
         email = st.text_input("Email address")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+        password = st.text_input("Choose a password", type="password", help="Choose a password you can remember; at least 8 characters is recommended.")
+        submitted = st.form_submit_button("Create account", type="primary", use_container_width=True)
     if submitted:
-        sign_in_callback(email, password)
-        st.rerun()
-    with st.expander("New to CampusConnect? Create a student account"):
-        with st.form("create_account_form"):
-            name = st.text_input("Display name")
-            email = st.text_input("College email")
-            password = st.text_input("Create password", type="password", help="Use at least 8 characters.")
-            submitted = st.form_submit_button("Create account", type="primary")
+        if not name.strip() or not email.strip() or len(password) < 6:
+            st.warning("Enter your name, a valid email, and a password with at least 6 characters.")
+        else:
+            signup_callback(name, email, password)
+            st.rerun()
+    with st.expander("Already have an account? Sign in"):
+        with st.form("sign_in_form"):
+            email = st.text_input("Email address", key="signin_email")
+            password = st.text_input("Password", type="password", key="signin_password")
+            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         if submitted:
-            if not name.strip() or len(password) < 8:
-                st.warning("Enter a display name and a password of at least 8 characters.")
-            else:
-                signup_callback(name, email, password)
-                st.rerun()
+            sign_in_callback(email, password)
+            st.rerun()
 
 
 apply_theme()
@@ -449,7 +465,8 @@ with heading:
     st.markdown("<div class='eyebrow'>B.TECH STUDENT COMMUNITY</div>", unsafe_allow_html=True)
     st.title(page)
 with bulb:
-    st.button("💡", key="theme_bulb", on_click=toggle_theme, help="Toggle light and dark theme")
+    current_theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]["name"]
+    st.button("💡", key="theme_bulb", on_click=toggle_theme, help=f"Current theme: {current_theme}. Click to cycle through all 7 themes.")
 if page != "Home":
     st.button("← Back to home", on_click=go_home)
 
@@ -462,10 +479,6 @@ if page == "Home":
         unsafe_allow_html=True,
     )
     st.write("")
-    st.markdown(
-        f"<div class='date-card'><b>Today · {today.strftime('%A, %d %B %Y')}</b><br>Today's special day is highlighted below when a campus creator posts one.</div>",
-        unsafe_allow_html=True,
-    )
     try:
         all_posts = client.table("campus_posts").select("*").eq("status", "published").order("event_date").execute().data or []
         groups = client.table("campus_groups").select("id").eq("is_active", True).execute().data or []
@@ -474,10 +487,25 @@ if page == "Home":
         specials = [p for p in today_activities if p.get("is_special")]
         notices = [p for p in all_posts if p["kind"] == "Notice"]
         important = [p for p in notices if p.get("is_important")]
-        if important:
-            st.subheader("📌 Important campus notices")
-            for post in sorted(important, key=lambda p: str(p.get("created_at", "")), reverse=True)[:3]:
-                show_post(post)
+        top_left, top_right = st.columns(2)
+        with top_left:
+            st.markdown(
+                f"<div class='date-card'><b>Today · {today.strftime('%A, %d %B %Y')}</b><br>Today's special day is highlighted below when a campus creator posts one.</div>",
+                unsafe_allow_html=True,
+            )
+        with top_right:
+            with st.container(border=True):
+                st.subheader("📌 Important campus notice")
+                if important:
+                    featured_notice = sorted(important, key=lambda p: str(p.get("created_at", "")), reverse=True)[0]
+                    st.caption(f"{featured_notice['event_date']} · {featured_notice['audience']}")
+                    st.markdown(f"**{featured_notice['title']}**")
+                    poster_url = str(featured_notice.get("poster_url") or "")
+                    if poster_url.startswith("https://"):
+                        st.image(poster_url, use_container_width=True)
+                    st.write(featured_notice["body"])
+                else:
+                    st.info("There are no pinned important notices right now.")
         m1, m2, m3 = st.columns(3)
         m1.metric("Study groups", len(groups))
         m2.metric("Groups you joined", len(mine))
@@ -491,7 +519,7 @@ if page == "Home":
             st.subheader("📰 Latest campus notices")
             for post in latest_notices[:3]:
                 show_post(post)
-        elif not important:
+        elif not notices:
             st.subheader("📌 Campus notices")
             st.info("Published campus notices will appear here.")
 
