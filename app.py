@@ -109,6 +109,7 @@ def signup_callback(name, email, password):
 def sign_out_callback():
     clear_login()
     st.session_state.pop("active_group_id", None)
+    st.session_state.pop("last_logged_view_page", None)
     st.session_state.nav_page = "Home"
 
 
@@ -227,6 +228,9 @@ def show_post(post):
             flags.append("✨ Special day")
         st.caption(" · ".join([post["kind"], str(post["event_date"]), post["audience"], *flags]))
         st.subheader(post["title"])
+        poster_url = str(post.get("poster_url") or "").strip()
+        if poster_url.startswith("https://"):
+            st.image(poster_url, use_container_width=True)
         st.write(post["body"])
         st.caption(f"Posted by {post['created_by_name']}")
 
@@ -345,9 +349,10 @@ def apply_theme():
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] { border:1px solid #d6e4da; border-radius:999px; padding:.48rem .8rem; background:#f8fbf8; box-shadow:0 2px 5px #183c2b0b; transition:all .16s ease; }
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover { background:#e6f3e9; border-color:#8ab59a; transform:translateY(-1px); }
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) { background:#d9eee0; border-color:#4b9870; box-shadow:0 3px 8px #1c59331c; }
-        .st-key-theme_bulb { position:fixed; z-index:9999; top:0; right:1.2rem; width:48px; padding-top:18px; }
+        .st-key-theme_bulb { position:fixed; z-index:99999; top:3.35rem; right:1.2rem; width:48px; padding-top:18px; }
         .st-key-theme_bulb:before { content:''; position:absolute; top:0; left:50%; height:19px; border-left:2px solid #ae8d50; }
         .st-key-theme_bulb button { border-radius:50% 50% 45% 45%; width:48px; min-width:48px; height:48px; min-height:48px; padding:0; font-size:1.5rem; background:#fff7d9; border:2px solid #d6b66a; box-shadow:0 3px 12px #0003; }
+        .st-key-theme_bulb button:hover { background:#ffe894; box-shadow:0 5px 18px #9b741b55; transform:translateY(2px); }
         """ + dark_css + "</style>",
         unsafe_allow_html=True,
     )
@@ -362,16 +367,15 @@ def show_login():
     if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
         st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
         return
-    sign_tab, create_tab = st.tabs(["Sign in", "Create account"])
-    with sign_tab:
-        with st.form("sign_in_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Sign in", type="primary")
-        if submitted:
-            sign_in_callback(email, password)
-            st.rerun()
-    with create_tab:
+    st.subheader("Sign in")
+    with st.form("sign_in_form"):
+        email = st.text_input("Email address")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+    if submitted:
+        sign_in_callback(email, password)
+        st.rerun()
+    with st.expander("New to CampusConnect? Create a student account"):
         with st.form("create_account_form"):
             name = st.text_input("Display name")
             email = st.text_input("College email")
@@ -430,6 +434,16 @@ with st.sidebar:
     st.caption(auth_user.email or "Signed-in student")
     st.button("Sign out", on_click=sign_out_callback)
 
+# Store one anonymous view each time a signed-in student opens a different page.
+# No student ID, email, or message is sent to this aggregate analytics table.
+if st.session_state.get("last_logged_view_page") != page:
+    try:
+        client.table("campus_app_views").insert({"page_name": page}).execute()
+    except Exception:
+        # Keep the student app working if the optional analytics table is not installed yet.
+        pass
+    st.session_state["last_logged_view_page"] = page
+
 heading, bulb = st.columns([12, 1])
 with heading:
     st.markdown("<div class='eyebrow'>B.TECH STUDENT COMMUNITY</div>", unsafe_allow_html=True)
@@ -460,20 +474,25 @@ if page == "Home":
         specials = [p for p in today_activities if p.get("is_special")]
         notices = [p for p in all_posts if p["kind"] == "Notice"]
         important = [p for p in notices if p.get("is_important")]
+        if important:
+            st.subheader("📌 Important campus notices")
+            for post in sorted(important, key=lambda p: str(p.get("created_at", "")), reverse=True)[:3]:
+                show_post(post)
         m1, m2, m3 = st.columns(3)
         m1.metric("Study groups", len(groups))
         m2.metric("Groups you joined", len(mine))
         m3.metric("Activities today", len(today_activities))
-        st.subheader("📌 Campus notices")
-        if notices:
-            featured_notices = sorted(
-                notices,
-                key=lambda p: (bool(p.get("is_important")), str(p.get("created_at", ""))),
-                reverse=True,
-            )
-            for post in featured_notices[:4]:
+        latest_notices = sorted(
+            [post for post in notices if not post.get("is_important")],
+            key=lambda p: str(p.get("created_at", "")),
+            reverse=True,
+        )
+        if latest_notices:
+            st.subheader("📰 Latest campus notices")
+            for post in latest_notices[:3]:
                 show_post(post)
-        else:
+        elif not important:
+            st.subheader("📌 Campus notices")
             st.info("Published campus notices will appear here.")
 
         try:
