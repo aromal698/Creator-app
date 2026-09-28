@@ -61,6 +61,13 @@ create table if not exists public.student_feedback (
     created_at timestamptz not null default now()
 );
 
+-- Creator-managed public campus links. Values are links only, never API keys.
+create table if not exists public.campus_settings (
+    key text primary key check (key in ('whatsapp_community_url', 'whatsapp_channel_url', 'google_calendar_embed_url')),
+    value text not null default '',
+    updated_at timestamptz not null default now()
+);
+
 -- Seed a department study group for every semester (9 departments × 8 semesters).
 insert into public.campus_groups (name, department, semester, description, created_by_name, is_default)
 select
@@ -81,15 +88,17 @@ alter table public.group_members enable row level security;
 alter table public.group_messages enable row level security;
 alter table public.campus_posts enable row level security;
 alter table public.student_feedback enable row level security;
+alter table public.campus_settings enable row level security;
 
 revoke all on public.campus_groups, public.group_members, public.group_messages,
-    public.campus_posts, public.student_feedback from anon;
+    public.campus_posts, public.student_feedback, public.campus_settings from anon;
 
 grant select, insert on public.campus_groups to authenticated;
 grant select, insert, delete on public.group_members to authenticated;
 grant select, insert on public.group_messages to authenticated;
 grant select on public.campus_posts to authenticated;
 grant insert on public.student_feedback to authenticated;
+grant select on public.campus_settings to authenticated;
 
 drop policy if exists "Students see active groups" on public.campus_groups;
 create policy "Students see active groups"
@@ -148,3 +157,7 @@ drop policy if exists "Students send their own feedback" on public.student_feedb
 create policy "Students send their own feedback"
     on public.student_feedback for insert to authenticated
     with check (user_id = (select auth.uid()));
+
+drop policy if exists "Students read public campus links" on public.campus_settings;
+create policy "Students read public campus links"
+    on public.campus_settings for select to authenticated using (true);
