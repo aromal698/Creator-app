@@ -2,9 +2,9 @@
 
 A two-app Streamlit campus community for B.Tech students. Both apps use one Supabase database.
 
-- `app.py` — student app: accounts, pebble-style navigation, join-to-chat groups, WhatsApp-style chats, front-page campus notices, daily AI study thought, activities, calendar, AI study buddy, web search, WhatsApp links, and feedback.
-- `creator_app.py` — separate password-protected Creator Studio: AI-assisted notice/activity/calendar drafts, poster reading, special-day highlighting, public campus links, publish/edit/delete, and AI-assisted group administration.
-- `supabase_schema.sql` — shared tables, initial department and semester groups, campus links, and student access policies.
+- `app.py` — student app: a simple sign-in-first screen, pebble-style navigation, join-to-chat groups, WhatsApp-style chats, front-page campus notices, daily AI study thought, activities, calendar, AI study buddy, web search, WhatsApp links, and feedback.
+- `creator_app.py` — separate password-protected Creator Studio: AI-assisted notice/activity/calendar drafts, poster reading and poster creation/upload, special-day highlighting, public campus links, publish/edit/delete, group administration, and anonymous page-view totals.
+- `supabase_schema.sql` — shared tables, initial department and semester groups, campus links, anonymous page-view counts, poster storage bucket, and student access policies.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
 
 Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Groq AI helps with study explanations, web search, the daily original campus thought, and creator drafts. Poster reading uses Groq's image-capable Qwen model and may require paid model access; the creator app asks before sending an uploaded image. A creator reviews content before publishing. AI cannot guarantee factual accuracy. Usage limits apply, and all app users share the app owner's quota.
@@ -13,8 +13,8 @@ Student pages show published campus content. Creator drafts and edit controls re
 
 1. Create a project at [Supabase](https://supabase.com/).
 2. In the project, open **SQL Editor → New query**.
-3. Open `supabase_schema.sql`, copy its full contents, paste into the SQL Editor, and click **Run**. This creates groups for the listed departments and semesters 1–8, chats, campus posts, feedback, and database access policies.
-   If the database already exists, run the updated SQL again to add the campus-links table; the script uses safe create-if-missing and policy refresh statements.
+3. Open `supabase_schema.sql`, copy its full contents, paste into the SQL Editor, and click **Run**. This creates groups for the listed departments and semesters 1–8, chats, campus posts, feedback, campus links, anonymous page-view counts, the public poster bucket, and database access policies.
+   If the database already exists, run the updated SQL again. It adds missing columns/tables and refreshes policies without deleting existing posts or messages.
 4. In **Authentication → Providers**, enable email sign-in. Email confirmation is recommended.
 5. Find the project URL and publishable/anon key in the Supabase API key settings. Keep the service-role/secret key for the server-side Creator Studio only.
 
@@ -25,7 +25,7 @@ The app calendar always lists creator-published events saved in Supabase. Creato
 1. Create/select a campus calendar in Google Calendar and add the special dates/events you want to share.
 2. Make it public only if the calendar is safe for all students and the public to see. Google notes an embedded calendar is only visible to people with permission unless it is public.
 3. On a computer, open Calendar **Settings → select that calendar → Integrate calendar → Customize**.
-4. Copy the embed code and use only the URL between its `src="..."` quotes. Put that full URL in the student app's `GOOGLE_CALENDAR_EMBED_URL` secret.
+4. Copy the embed code and use only the URL between its `src="..."` quotes. An authorized creator saves that URL in **Creator Studio → Campus links**.
 
 A creator-published Supabase event does not automatically get written into the Google Calendar. The Add to Google Calendar button lets a student add that event to their own calendar. If you want it also displayed in the embedded campus calendar, an authorized person must add it to that Google Calendar too. [Google Calendar embed instructions](https://support.google.com/calendar/answer/41207?hl=en).
 
@@ -33,7 +33,15 @@ A creator-published Supabase event does not automatically get written into the G
 
 Create your WhatsApp Community and Channel, then copy their invite/share URLs. A creator can save them in **Creator Studio → Campus links**; the student app shows those links on Home and the WhatsApp page. The app links to WhatsApp; it does not read or send WhatsApp messages.
 
-## 4. Upload code to GitHub
+## 4. Student login, page views, and notice posters
+
+- Students see **Sign in** first. New students can expand **New to CampusConnect? Create a student account** underneath it. Existing Supabase accounts continue to work.
+- The creator dashboard counts app page openings in **App page views** and **Views today**. These are not unique-student counts: returning to the same page during one login session is counted once. The log stores only the page name and timestamp, not a student ID, email, or chat message.
+- In **Creator Studio → Manage notices & activities**, add event details, optionally upload a photo, then select **Create poster picture from these details**. You can also upload a finished poster and attach it directly. Review the preview, then save or publish. Students see the attached image with the notice/activity.
+- Poster image storage uses a public Supabase Storage bucket so student browsers can display images. Upload only artwork intended to be public. An uploaded background photo is sent to Supabase only when saving or publishing; poster reading sends the selected file to Groq only after you confirm in the app.
+- Running the updated `supabase_schema.sql` creates the poster bucket and page-view table. `Pillow` in `requirements.txt` enables local poster design generation.
+
+## 5. Upload code to GitHub
 
 Upload and commit these files to your repository root:
 
@@ -48,7 +56,7 @@ Upload and commit these files to your repository root:
 
 Do **not** upload `.streamlit/secrets.toml`, API keys, database keys, or creator passwords. `.gitignore` hides the local `secrets.toml` from Git, but do not rely on that as your only safeguard: check carefully before committing.
 
-## 5. Create a Groq API key (free plan)
+## 6. Create a Groq API key (free plan)
 
 1. Create/sign in to a Groq account at [console.groq.com](https://console.groq.com/).
 2. Open [API Keys](https://console.groq.com/keys) and create a key for CampusConnect.
@@ -56,7 +64,7 @@ Do **not** upload `.streamlit/secrets.toml`, API keys, database keys, or creator
 
 The student and creator apps each need the same `GROQ_API_KEY` added separately to their own Streamlit Secrets.
 
-## 6. Deploy the student app
+## 7. Deploy the student app
 
 1. Sign in at [Streamlit Community Cloud](https://share.streamlit.io/), select **Create app**, then choose your GitHub repository and branch.
 2. Set **Main file path** to `app.py`.
@@ -71,7 +79,7 @@ GROQ_MODEL = "openai/gpt-oss-20b"
 
 Replace all examples with your real settings and click **Deploy**. Calendar and WhatsApp URLs are entered later by the creator in Creator Studio → Campus links. Streamlit's docs show the entrypoint and secrets fields in the deploy workflow. [Deploy an app](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app).
 
-## 7. Deploy Creator Studio as another app
+## 8. Deploy Creator Studio as another app
 
 1. In Streamlit Community Cloud, choose **Create app** again.
 2. Select the same repository and branch, but set **Main file path** to `creator_app.py`.
@@ -91,7 +99,7 @@ The poster-reading model may incur usage charges; you can omit `GROQ_VISION_MODE
 
 The Creator Studio password is shared in this starter version. Anyone who has it can manage campus updates and groups. Keep the Creator Studio URL and password for authorized creators. The service-role key can bypass student row policies; never add it to the student app's secrets or GitHub. [Supabase API key safety](https://supabase.com/docs/guides/getting-started/api-keys).
 
-## 7. Use CampusConnect
+## 9. Use CampusConnect
 
 - Students create an account, browse department/semester groups, and join. Joining opens that group's chat. Chats use message bubbles styled after WhatsApp; WhatsApp Community and Channel buttons open external links.
 - The student Home page shows today's date, today's activities, special-day items, important campus notices, recent notices, and upcoming activities.
