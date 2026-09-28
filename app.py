@@ -3,6 +3,7 @@
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 import os
+import re
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -182,6 +183,36 @@ def groq_completion(messages, use_browser_search=False):
     return answer, list(unique_sources.values())
 
 
+def render_ai_markdown(answer):
+    """Render common LaTeX math returned by AI as readable Streamlit math."""
+    text = str(answer or "")
+    # Streamlit understands math enclosed in $...$ or $$...$$. Many models
+    # instead return the equivalent LaTeX delimiters used in other viewers.
+    text = text.replace(r"\[", "\n$$\n").replace(r"\]", "\n$$\n")
+    text = text.replace(r"\(", "$").replace(r"\)", "$")
+
+    rendered_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        # Repair bare display equations such as: [ p + \frac{1}{2}\rho v^{2} = ... ]
+        if (
+            stripped
+            and not stripped.startswith(("$", "- ", "* ", ">", "```"))
+            and "=" in stripped
+            and re.search(r"\\(?:frac|rho|theta|pi|sqrt|sum|int|text|cdot|times|Delta|alpha|beta)", stripped)
+        ):
+            equation = stripped
+            if equation.startswith("[") and equation.endswith("]"):
+                equation = equation[1:-1].strip()
+            line = f"$${equation}$$"
+        else:
+            # Make standalone raw math commands in explanatory sentences readable too.
+            line = line.replace(r"\rho", "ρ").replace(r"\theta", "θ").replace(r"\pi", "π")
+            line = line.replace(r"\times", "×").replace(r"\cdot", "·")
+        rendered_lines.append(line)
+    st.markdown("\n".join(rendered_lines))
+
+
 def show_post(post):
     with st.container(border=True):
         flags = []
@@ -210,7 +241,10 @@ def groq_browser_search(question):
                 "role": "system",
                 "content": (
                     "You are CampusConnect's research helper. Use the browser search tool, answer clearly, "
-                    "cite sources in your response, note uncertainty, and never claim certainty beyond sources."
+                    "cite sources in your response, note uncertainty, and never claim certainty beyond sources. "
+                    "For equations, use standard LaTeX wrapped in $...$ for inline math or $$...$$ for a display equation. "
+                    "Never show raw LaTeX commands such as \\frac or \\rho without math delimiters. "
+                    "After each important equation, explain in plain words what it means and define every symbol."
                 ),
             },
             {"role": "user", "content": question},
@@ -563,7 +597,7 @@ elif page == "AI Search":
     result = st.session_state.get("ai_search_result")
     if result:
         st.markdown(f"**Your question:** {result['question']}")
-        st.markdown(result["answer"])
+        render_ai_markdown(result["answer"])
         if result["sources"]:
             st.markdown("**Sources**")
             for source in result["sources"]:
@@ -612,7 +646,11 @@ elif page == "AI Study Buddy":
                                 "role": "system",
                                 "content": (
                                     "You are CampusConnect's friendly B.Tech study buddy. Explain step by step, "
-                                    "give assignment hints rather than dishonest submissions, and say when uncertain."
+                                    "give assignment hints rather than dishonest submissions, and say when uncertain. "
+                                    "For equations, use standard LaTeX wrapped in $...$ for inline math or $$...$$ for a display equation. "
+                                    "Never show raw LaTeX commands such as \\frac or \\rho without math delimiters. "
+                                    "Then explain the equation in simple words, define each symbol with its unit when applicable, "
+                                    "and show a small worked example when useful."
                                 ),
                             }
                         ]
@@ -626,7 +664,7 @@ elif page == "AI Study Buddy":
                     key = str(secret("GROQ_API_KEY", ""))
                     detail = str(exc).replace(key, "[hidden API key]") if key else str(exc)
                     answer = f"Free AI request failed ({type(exc).__name__}). Details: {detail[:500]}"
-                st.markdown(answer)
+                render_ai_markdown(answer)
         chat.append({"role": "assistant", "content": answer})
 
 elif page == "Feedback":
