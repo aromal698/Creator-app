@@ -83,42 +83,59 @@ def get_authenticated_client():
         return client, None, "Your session expired. Please sign in again."
 
 
-def sign_in_callback(email, password):
+def email_code_callback(email, name="", create_account=False):
+    reset_email_code()
     url = secret("SUPABASE_URL")
     public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
     try:
         client = create_client(url, public_key)
-        response = client.auth.sign_in_with_password({"email": email.strip(), "password": password})
-        if save_auth_response(response):
-            st.session_state.nav_page = "Home"
-            st.session_state.auth_notice = "Signed in successfully."
+        options = {"should_create_user": bool(create_account)}
+        if create_account:
+            options["data"] = {"display_name": name.strip()}
+        client.auth.sign_in_with_otp({"email": email.strip(), "options": options})
+        st.session_state.pending_auth_email = email.strip()
+        st.session_state.pending_auth_name = name.strip() if create_account else ""
+        st.session_state.auth_notice = "If the email can sign in, a one-time code has been sent. Check your inbox and spam folder."
+    except Exception as exc:
+        message = str(exc).lower()
+        if "rate limit" in message or "email rate limit" in message:
+            st.session_state.auth_notice = "Supabase temporarily stopped sending sign-in emails because its email limit was reached. Wait for the limit to reset or configure a trusted SMTP provider in Supabase Auth settings."
         else:
-            st.session_state.auth_notice = "Sign-in did not return a session. Check your email confirmation settings."
-    except Exception:
-        st.session_state.auth_notice = "Sign-in failed. Check the email and password, then try again."
+            st.session_state.auth_notice = "Could not send the sign-in code. Check the email address and Supabase email settings, then try again."
 
 
-def signup_callback(name, email, password):
+def verify_email_code_callback(code):
+    email = str(st.session_state.get("pending_auth_email", "")).strip()
+    if not email:
+        st.session_state.auth_notice = "Enter your email again to request a new sign-in code."
+        return
     url = secret("SUPABASE_URL")
     public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
     try:
         client = create_client(url, public_key)
-        response = client.auth.sign_up(
-            {"email": email.strip(), "password": password, "options": {"data": {"display_name": name.strip()}}}
-        )
-        if save_auth_response(response, name.strip()):
+        response = client.auth.verify_otp({"email": email, "token": code.strip(), "type": "email"})
+        if save_auth_response(response, st.session_state.get("pending_auth_name", "")):
+            st.session_state.pop("pending_auth_email", None)
+            st.session_state.pop("pending_auth_name", None)
             st.session_state.nav_page = "Home"
-            st.session_state.auth_notice = "Account created. You are signed in."
+            st.session_state.auth_notice = "Email verified. Welcome to CampusConnect."
         else:
-            st.session_state.auth_notice = "Account created. Check your email to confirm it, then sign in."
+            st.session_state.auth_notice = "The code was accepted, but CampusConnect did not receive a session. Please request another code."
     except Exception:
-        st.session_state.auth_notice = "Account could not be created. Check the email, password, and Supabase Auth settings."
+        st.session_state.auth_notice = "That code did not work or has expired. Check it, or request a fresh code for this email."
+
+
+def reset_email_code():
+    st.session_state.pop("pending_auth_email", None)
+    st.session_state.pop("pending_auth_name", None)
+    st.session_state.pop("student_email_code", None)
 
 
 def sign_out_callback():
     clear_login()
     st.session_state.pop("active_group_id", None)
     st.session_state.pop("last_logged_view_page", None)
+    reset_email_code()
     st.session_state.nav_page = "Home"
 
 
@@ -128,6 +145,12 @@ def go_home():
 
 def toggle_theme():
     st.session_state.theme_index = (int(st.session_state.get("theme_index", 0)) + 1) % len(THEMES)
+
+
+def theme_control():
+    current_theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]["name"]
+    st.button("💡", key="theme_bulb", on_click=toggle_theme, help=f"Current theme: {current_theme}. Click to cycle through all 7 themes.")
+    st.caption(f"Theme: {current_theme}")
 
 
 def go_to_chat(group_id):
@@ -318,21 +341,32 @@ def render_group_chat_messages(database, group_id, user_id, display_name):
 
 def apply_theme():
     theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]
+    scheme = "dark" if theme["name"] == "Dark" else "light"
     theme_css = f"""
-    .stApp {{ background:{theme['bg']} !important; color:{theme['text']} !important; }}
+    .stApp {{ color-scheme:{scheme}; --primary-color:{theme['accent']}; --background-color:{theme['bg']}; --secondary-background-color:{theme['side']}; --text-color:{theme['text']}; background:{theme['bg']} !important; color:{theme['text']} !important; }}
     .stApp [data-testid="stSidebar"] {{ background:{theme['side']} !important; }}
-    .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp label,.stApp [data-testid="stMarkdownContainer"] {{ color:{theme['text']}; }}
+    .stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp p,.stApp label,.stApp legend,.stApp [data-testid="stMarkdownContainer"],.stApp [data-testid="stWidgetLabel"],.stApp [data-testid="stWidgetLabel"] p {{ color:{theme['text']} !important; }}
+    .stApp [data-testid="stCaptionContainer"],.stApp [data-testid="stCaptionContainer"] p {{ color:{theme['muted']} !important; }}
     .stApp .eyebrow,.stApp .quote-label {{ color:{theme['accent']} !important; }}
     .stApp .hero {{ background:linear-gradient(120deg,{theme['hero1']},{theme['hero2']}); border-color:{theme['border']}; }}
     .stApp .hero h2,.stApp .hero p,.stApp .date-card,.stApp .quote-card,.stApp .quote-text,.stApp .quote-note {{ color:{theme['text']} !important; }}
-    .stApp .date-card,.stApp .quote-card,.stApp .chat-header {{ background:{theme['soft']}; border-color:{theme['border']}; }}
-    .stApp [data-testid="stMetric"],.stApp [data-testid="stVerticalBlockBorderWrapper"] > div {{ background:{theme['surface']}; border-color:{theme['border']}; color:{theme['text']}; }}
-    .stApp input,.stApp textarea {{ background:{theme['surface']}; color:{theme['text']}; }}
-    .stApp a {{ color:{theme['accent']}; }}
-    .stApp div.stButton > button {{ border-color:{theme['accent']}; color:{theme['accent']}; }}
-    .stApp div.stButton > button:hover {{ background:{theme['soft']}; }}
-    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] {{ background:{theme['surface']}; border-color:{theme['border']}; color:{theme['text']}; }}
-    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {{ background:{theme['soft']}; border-color:{theme['accent']}; }}
+    .stApp .date-card,.stApp .quote-card,.stApp .chat-header {{ background:{theme['soft']} !important; border-color:{theme['border']} !important; }}
+    .stApp [data-testid="stMetric"],.stApp [data-testid="stVerticalBlockBorderWrapper"] > div {{ background:{theme['surface']} !important; border-color:{theme['border']} !important; color:{theme['text']} !important; }}
+    .stApp input,.stApp textarea,.stApp [data-baseweb="input"] > div,.stApp [data-baseweb="textarea"] > div,.stApp [data-baseweb="select"] > div {{ background:{theme['surface']} !important; color:{theme['text']} !important; border-color:{theme['border']} !important; }}
+    .stApp input::placeholder,.stApp textarea::placeholder {{ color:{theme['muted']} !important; opacity:1; }}
+    .stApp [data-baseweb="select"] *,.stApp [role="combobox"],.stApp [role="listbox"],.stApp [role="option"] {{ color:{theme['text']} !important; }}
+    .stApp [role="listbox"],.stApp [role="option"] {{ background:{theme['surface']} !important; }}
+    .stApp [role="option"]:hover {{ background:{theme['soft']} !important; }}
+    .stApp [data-testid="stAlert"] {{ background:{theme['soft']} !important; border:1px solid {theme['border']} !important; }}
+    .stApp [data-testid="stAlert"] p {{ color:{theme['text']} !important; }}
+    .stApp [data-testid="stDataFrame"],.stApp [data-testid="stTable"] {{ background:{theme['surface']} !important; color:{theme['text']} !important; }}
+    .stApp [data-testid="stTabs"] button {{ color:{theme['text']} !important; }}
+    .stApp a {{ color:{theme['accent']} !important; }}
+    .stApp div.stButton > button,.stApp [data-testid="stFormSubmitButton"] button,.stApp [data-testid="stDownloadButton"] button,.stApp [data-testid="stLinkButton"] a {{ border-color:{theme['accent']} !important; color:{theme['accent']} !important; }}
+    .stApp div.stButton > button:hover,.stApp [data-testid="stFormSubmitButton"] button:hover,.stApp [data-testid="stDownloadButton"] button:hover {{ background:{theme['soft']} !important; }}
+    .stApp .st-key-theme_bulb button {{ background:#fff7d9 !important; color:#704f00 !important; border-color:#d6b66a !important; }}
+    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] {{ background:{theme['surface']} !important; border-color:{theme['border']} !important; color:{theme['text']} !important; }}
+    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; }}
     """
     st.markdown(
         """<style>
@@ -375,34 +409,57 @@ def apply_theme():
 
 
 def show_login():
+    bulb_space, bulb_column = st.columns([12, 1])
+    with bulb_column:
+        theme_control()
     st.markdown("<div class='eyebrow'>STUDENT SIGN IN</div>", unsafe_allow_html=True)
     st.title("Welcome to CampusConnect")
-    st.write("First visit? Create your student account with your name, email, and a password. Next time, sign in with the same email and password.")
+    st.write("Create your account once with your name and email. After that, sign in using your email and a one-time code—no password to remember.")
     if st.session_state.get("auth_notice"):
         st.info(st.session_state.pop("auth_notice"))
     if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
         st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
         return
-    st.subheader("Create your account")
-    with st.form("create_account_form"):
-        name = st.text_input("Your name")
-        email = st.text_input("Email address")
-        password = st.text_input("Choose a password", type="password", help="Choose a password you can remember; at least 8 characters is recommended.")
-        submitted = st.form_submit_button("Create account", type="primary", use_container_width=True)
-    if submitted:
-        if not name.strip() or not email.strip() or len(password) < 6:
-            st.warning("Enter your name, a valid email, and a password with at least 6 characters.")
-        else:
-            signup_callback(name, email, password)
-            st.rerun()
-    with st.expander("Already have an account? Sign in"):
-        with st.form("sign_in_form"):
-            email = st.text_input("Email address", key="signin_email")
-            password = st.text_input("Password", type="password", key="signin_password")
-            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+    create_tab, sign_in_tab = st.tabs(["First time? Create account", "Returning student? Sign in"])
+    with create_tab:
+        st.caption("Enter your name and email once. We will email a verification code.")
+        with st.form("create_account_form"):
+            name = st.text_input("Your name", key="new_student_name")
+            email = st.text_input("Email address", key="new_student_email")
+            submitted = st.form_submit_button("Create account and email code", type="primary", use_container_width=True)
         if submitted:
-            sign_in_callback(email, password)
-            st.rerun()
+            if not name.strip() or "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+                st.warning("Enter your name and a valid email address.")
+            else:
+                email_code_callback(email, name, create_account=True)
+                st.rerun()
+    with sign_in_tab:
+        st.caption("Enter your registered email. We will send a one-time code—no password needed.")
+        with st.form("student_email_sign_in_form"):
+            email = st.text_input("Email address", key="returning_student_email")
+            submitted = st.form_submit_button("Email me a sign-in code", type="primary", use_container_width=True)
+        if submitted:
+            if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+                st.warning("Enter a valid email address.")
+            else:
+                email_code_callback(email, create_account=False)
+                st.rerun()
+
+    pending_email = st.session_state.get("pending_auth_email")
+    if pending_email:
+        st.divider()
+        st.subheader("Enter your email code")
+        st.caption(f"A code was requested for {pending_email}. Check your inbox and spam folder.")
+        with st.form("verify_student_email_code_form"):
+            code = st.text_input("One-time code", max_chars=12, key="student_email_code")
+            verify = st.form_submit_button("Verify code and enter", type="primary", use_container_width=True)
+        if verify:
+            if len(code.strip()) < 4:
+                st.warning("Enter the code from your email.")
+            else:
+                verify_email_code_callback(code)
+                st.rerun()
+        st.button("Use a different email", on_click=reset_email_code, key="reset_student_email_code")
 
 
 apply_theme()
@@ -465,8 +522,7 @@ with heading:
     st.markdown("<div class='eyebrow'>B.TECH STUDENT COMMUNITY</div>", unsafe_allow_html=True)
     st.title(page)
 with bulb:
-    current_theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]["name"]
-    st.button("💡", key="theme_bulb", on_click=toggle_theme, help=f"Current theme: {current_theme}. Click to cycle through all 7 themes.")
+    theme_control()
 if page != "Home":
     st.button("← Back to home", on_click=go_home)
 
