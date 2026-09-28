@@ -5,6 +5,7 @@ import hmac
 import os
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import requests
 import streamlit as st
 from supabase import create_client
 
@@ -62,41 +63,50 @@ def creator_sign_out():
     st.session_state.creator_page = "Creator dashboard"
 
 
-def gemini_draft(kind, title, event_day, audience, notes):
-    api_key = secret("GEMINI_API_KEY")
+def groq_generate_text(system_prompt, user_prompt):
+    api_key = str(secret("GROQ_API_KEY", "")).strip()
     if not api_key:
         return None
-    from google import genai
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=secret("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-        contents=(
-            f"Draft a clear, concise campus {kind.lower()} for B.Tech students. Use only the provided facts. "
-            "Do not invent time, venue, fees, links, contact details, or organizers; add [creator: add details] where missing. "
-            "Use a friendly and professional tone. Return only the draft.\n"
-            f"Title: {title}\nDate: {event_day}\nAudience: {audience}\nCreator notes: {notes or 'None'}"
-        ),
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": secret("GROQ_MODEL", "openai/gpt-oss-20b"),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_completion_tokens": 900,
+            "reasoning_effort": "low",
+        },
+        timeout=60,
     )
-    return response.text
+    try:
+        result = response.json()
+    except ValueError:
+        result = {}
+    if not response.ok:
+        error = result.get("error", {}) if isinstance(result, dict) else {}
+        message = error.get("message", response.text[:400]) if isinstance(error, dict) else str(error)
+        raise RuntimeError(f"Groq API returned HTTP {response.status_code}: {message}")
+    return result["choices"][0]["message"].get("content", "")
 
 
-def gemini_group_description(name, department, semester):
-    api_key = secret("GEMINI_API_KEY")
-    if not api_key:
-        return None
-    from google import genai
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=secret("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-        contents=(
-            "Write a friendly one or two sentence purpose for a student study/chat group. "
-            "Do not invent campus-specific facts, dates, links, or promises. Return only the description.\n"
-            f"Name: {name}\nDepartment: {department}\nSemester: {semester}"
-        ),
+def ai_draft(kind, title, event_day, audience, notes):
+    return groq_generate_text(
+        f"Draft a clear, concise campus {kind.lower()} for B.Tech students. Use only the provided facts. "
+        "Do not invent time, venue, fees, links, contact details, or organizers; add [creator: add details] where missing. "
+        "Use a friendly and professional tone. Return only the draft.",
+        f"Title: {title}\nDate: {event_day}\nAudience: {audience}\nCreator notes: {notes or 'None'}",
     )
-    return response.text
+
+
+def ai_group_description(name, department, semester):
+    return groq_generate_text(
+        "Write a friendly one or two sentence purpose for a student study/chat group. "
+        "Do not invent campus-specific facts, dates, links, or promises. Return only the description.",
+        f"Name: {name}\nDepartment: {department}\nSemester: {semester}",
+    )
 
 
 def creator_login():
@@ -174,23 +184,23 @@ if page == "Creator dashboard":
 elif page == "Manage notices & activities":
     new_tab, edit_tab = st.tabs(["Create new update", "Edit existing updates"])
     with new_tab:
-        st.caption("Gemini drafts the wording. Review all facts before saving or publishing.")
-        st.warning("Do not include personal student information in Gemini prompts. Check event time, place, date, and links before publishing.")
+        st.caption("Free AI drafts the wording. Review all facts before saving or publishing.")
+        st.warning("Do not include personal student information in AI prompts. Check event time, place, date, and links before publishing.")
         kind = st.selectbox("Type", ["Notice", "Activity"], key="new_kind")
         title = st.text_input("Title", key="new_title")
         event_day = st.date_input("Date", value=today, key="new_date")
         audience = st.selectbox("Audience", ["All departments", *DEPARTMENTS], key="new_audience")
-        notes = st.text_input("Confirmed facts for Gemini", key="new_notes", placeholder="Time, venue, registration, organizer/contact")
-        if st.button("✨ Draft with Gemini", disabled=not title.strip(), key="new_ai_draft"):
+        notes = st.text_input("Confirmed facts for AI", key="new_notes", placeholder="Time, venue, registration, organizer/contact")
+        if st.button("✨ Draft with free AI", disabled=not title.strip(), key="new_ai_draft"):
             try:
-                draft = gemini_draft(kind, title.strip(), event_day.isoformat(), audience, notes.strip())
+                draft = ai_draft(kind, title.strip(), event_day.isoformat(), audience, notes.strip())
                 if draft:
                     st.session_state.new_post_body = draft
                     st.rerun()
                 else:
-                    st.warning("Add GEMINI_API_KEY to Creator Studio Secrets to use AI drafting.")
-            except Exception:
-                st.error("Gemini could not draft this update. Check the Gemini key and model, or write it manually.")
+                    st.warning("Add GROQ_API_KEY to Creator Studio Secrets to use AI drafting.")
+            except Exception as exc:
+                st.error(f"AI could not draft this update: {str(exc)[:400]}. You can write it manually.")
         body = st.text_area("Review and edit the final text", key="new_post_body", height=180)
         c1, c2 = st.columns(2)
         is_important = c1.checkbox("Pin as an important notice", disabled=(kind != "Notice"), key="new_important")
@@ -260,16 +270,16 @@ elif page == "Manage notices & activities":
             edit_date = st.date_input("Date", value=edit_date_default, key=f"edit_date_{selected_id}")
             edit_audience = st.selectbox("Audience", ["All departments", *DEPARTMENTS], index=( ["All departments", *DEPARTMENTS].index(item["audience"]) if item["audience"] in ["All departments", *DEPARTMENTS] else 0), key=f"edit_audience_{selected_id}")
             edit_notes = st.text_input("Extra confirmed facts for an AI rewrite", key=f"edit_notes_{selected_id}")
-            if st.button("✨ Rewrite draft with Gemini", key=f"edit_ai_{selected_id}"):
+            if st.button("✨ Rewrite draft with free AI", key=f"edit_ai_{selected_id}"):
                 try:
-                    draft = gemini_draft(edit_kind, edit_title, edit_date.isoformat(), edit_audience, edit_notes)
+                    draft = ai_draft(edit_kind, edit_title, edit_date.isoformat(), edit_audience, edit_notes)
                     if draft:
                         st.session_state[body_key] = draft
                         st.rerun()
                     else:
-                        st.warning("Add GEMINI_API_KEY to Creator Studio Secrets to use AI drafting.")
-                except Exception:
-                    st.error("Gemini could not rewrite this update. Check the key/model or edit manually.")
+                        st.warning("Add GROQ_API_KEY to Creator Studio Secrets to use AI drafting.")
+                except Exception as exc:
+                    st.error(f"AI could not rewrite this update: {str(exc)[:400]}. You can edit it manually.")
             edit_body = st.text_area("Review and edit text", value=item["body"], key=body_key, height=180)
             statuses = ["draft", "published"]
             edit_status = st.selectbox("Status", statuses, index=statuses.index(item["status"]), key=f"edit_status_{selected_id}")
@@ -309,16 +319,16 @@ elif page == "Group admin":
         c1, c2 = st.columns(2)
         department = c1.selectbox("Department", DEPARTMENTS, key="admin_group_department")
         semester = c2.selectbox("Semester", ["Any semester", *range(1, 9)], key="admin_group_semester")
-        if st.button("✨ Suggest group purpose with Gemini", disabled=not name.strip()):
+        if st.button("✨ Suggest group purpose with free AI", disabled=not name.strip()):
             try:
-                suggestion = gemini_group_description(name.strip(), department, semester)
+                suggestion = ai_group_description(name.strip(), department, semester)
                 if suggestion:
                     st.session_state.admin_group_description = suggestion
                     st.rerun()
                 else:
-                    st.warning("Add GEMINI_API_KEY to Creator Studio Secrets to use Gemini.")
-            except Exception:
-                st.error("Gemini could not suggest a group purpose. You can still write one yourself.")
+                    st.warning("Add GROQ_API_KEY to Creator Studio Secrets to use AI.")
+            except Exception as exc:
+                st.error(f"AI could not suggest a group purpose: {str(exc)[:400]}. You can still write one yourself.")
         if st.button("Create active group", type="primary", disabled=not name.strip()):
             if not name.strip():
                 st.warning("Enter a group name.")
