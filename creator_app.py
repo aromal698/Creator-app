@@ -18,13 +18,13 @@ from supabase import create_client
 
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other", "Cross-department"]
 THEMES = [
-    {"name": "White", "bg": "#f7faf8", "side": "#edf3ef", "surface": "#ffffff", "text": "#172b27", "accent": "#176b5b", "soft": "#e3f1e8", "border": "#d2e3d8"},
-    {"name": "Dark", "bg": "#101820", "side": "#17242d", "surface": "#1c2a34", "text": "#edf5f7", "accent": "#59c3a5", "soft": "#203a3b", "border": "#35515a"},
-    {"name": "Blue", "bg": "#f2f7ff", "side": "#e7effc", "surface": "#ffffff", "text": "#172b49", "accent": "#2563eb", "soft": "#dceaff", "border": "#c8d9f5"},
-    {"name": "Purple", "bg": "#f8f5ff", "side": "#eee8fb", "surface": "#ffffff", "text": "#302347", "accent": "#7650c8", "soft": "#eee5ff", "border": "#ddd0f5"},
-    {"name": "Amber", "bg": "#fffaf1", "side": "#f7eedc", "surface": "#ffffff", "text": "#3b2d17", "accent": "#bb6b0a", "soft": "#ffefcf", "border": "#efdbb4"},
-    {"name": "Rose", "bg": "#fff6f7", "side": "#f8e9ec", "surface": "#ffffff", "text": "#40252d", "accent": "#c13e68", "soft": "#ffe2e9", "border": "#f1cbd6"},
-    {"name": "Teal", "bg": "#f0fbfb", "side": "#e1f2f1", "surface": "#ffffff", "text": "#173537", "accent": "#078080", "soft": "#d7f2ef", "border": "#c0e3df"},
+    {"name": "White", "bg": "#f7faf8", "side": "#edf3ef", "surface": "#ffffff", "text": "#172b27", "muted": "#526861", "accent": "#176b5b", "soft": "#e3f1e8", "border": "#d2e3d8"},
+    {"name": "Dark", "bg": "#101820", "side": "#17242d", "surface": "#1c2a34", "text": "#edf5f7", "muted": "#b3c4cb", "accent": "#59c3a5", "soft": "#203a3b", "border": "#35515a"},
+    {"name": "Blue", "bg": "#f2f7ff", "side": "#e7effc", "surface": "#ffffff", "text": "#172b49", "muted": "#526987", "accent": "#2563eb", "soft": "#dceaff", "border": "#c8d9f5"},
+    {"name": "Purple", "bg": "#f8f5ff", "side": "#eee8fb", "surface": "#ffffff", "text": "#302347", "muted": "#706184", "accent": "#7650c8", "soft": "#eee5ff", "border": "#ddd0f5"},
+    {"name": "Amber", "bg": "#fffaf1", "side": "#f7eedc", "surface": "#ffffff", "text": "#3b2d17", "muted": "#786343", "accent": "#bb6b0a", "soft": "#ffefcf", "border": "#efdbb4"},
+    {"name": "Rose", "bg": "#fff6f7", "side": "#f8e9ec", "surface": "#ffffff", "text": "#40252d", "muted": "#80616a", "accent": "#c13e68", "soft": "#ffe2e9", "border": "#f1cbd6"},
+    {"name": "Teal", "bg": "#f0fbfb", "side": "#e1f2f1", "surface": "#ffffff", "text": "#173537", "muted": "#537174", "accent": "#078080", "soft": "#d7f2ef", "border": "#c0e3df"},
 ]
 try:
     INDIA_TZ = ZoneInfo("Asia/Kolkata")
@@ -43,16 +43,27 @@ def secret(name, default=None):
 
 def apply_theme():
     theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]
+    scheme = "dark" if theme["name"] == "Dark" else "light"
     theme_css = f"""
-    .stApp {{ background:{theme['bg']} !important; color:{theme['text']} !important; }}
+    .stApp {{ color-scheme:{scheme}; --primary-color:{theme['accent']}; --background-color:{theme['bg']}; --secondary-background-color:{theme['side']}; --text-color:{theme['text']}; background:{theme['bg']} !important; color:{theme['text']} !important; }}
     .stApp [data-testid="stSidebar"] {{ background:{theme['side']} !important; }}
-    .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp label,.stApp [data-testid="stMarkdownContainer"] {{ color:{theme['text']}; }}
+    .stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp p,.stApp label,.stApp legend,.stApp [data-testid="stMarkdownContainer"],.stApp [data-testid="stWidgetLabel"],.stApp [data-testid="stWidgetLabel"] p {{ color:{theme['text']} !important; }}
+    .stApp [data-testid="stCaptionContainer"],.stApp [data-testid="stCaptionContainer"] p {{ color:{theme['muted']} !important; }}
     .stApp .eyebrow {{ color:{theme['accent']} !important; }}
-    .stApp [data-testid="stMetric"],.stApp [data-testid="stVerticalBlockBorderWrapper"] > div {{ background:{theme['surface']}; border-color:{theme['border']}; color:{theme['text']}; }}
-    .stApp input,.stApp textarea {{ background:{theme['surface']}; color:{theme['text']}; }}
-    .stApp a {{ color:{theme['accent']}; }}
-    .stApp div.stButton > button {{ border-color:{theme['accent']}; color:{theme['accent']}; }}
-    .stApp div.stButton > button:hover {{ background:{theme['soft']}; }}
+    .stApp [data-testid="stMetric"],.stApp [data-testid="stVerticalBlockBorderWrapper"] > div {{ background:{theme['surface']} !important; border-color:{theme['border']} !important; color:{theme['text']} !important; }}
+    .stApp input,.stApp textarea,.stApp [data-baseweb="input"] > div,.stApp [data-baseweb="textarea"] > div,.stApp [data-baseweb="select"] > div {{ background:{theme['surface']} !important; color:{theme['text']} !important; border-color:{theme['border']} !important; }}
+    .stApp input::placeholder,.stApp textarea::placeholder {{ color:{theme['muted']} !important; opacity:1; }}
+    .stApp [data-baseweb="select"] *,.stApp [role="combobox"],.stApp [role="listbox"],.stApp [role="option"] {{ color:{theme['text']} !important; }}
+    .stApp [role="listbox"],.stApp [role="option"] {{ background:{theme['surface']} !important; }}
+    .stApp [role="option"]:hover {{ background:{theme['soft']} !important; }}
+    .stApp [data-testid="stAlert"] {{ background:{theme['soft']} !important; border:1px solid {theme['border']} !important; }}
+    .stApp [data-testid="stAlert"] p {{ color:{theme['text']} !important; }}
+    .stApp [data-testid="stDataFrame"],.stApp [data-testid="stTable"] {{ background:{theme['surface']} !important; color:{theme['text']} !important; }}
+    .stApp [data-testid="stTabs"] button {{ color:{theme['text']} !important; }}
+    .stApp a {{ color:{theme['accent']} !important; }}
+    .stApp div.stButton > button,.stApp [data-testid="stFormSubmitButton"] button,.stApp [data-testid="stDownloadButton"] button,.stApp [data-testid="stLinkButton"] a {{ border-color:{theme['accent']} !important; color:{theme['accent']} !important; }}
+    .stApp div.stButton > button:hover,.stApp [data-testid="stFormSubmitButton"] button:hover,.stApp [data-testid="stDownloadButton"] button:hover {{ background:{theme['soft']} !important; }}
+    .stApp .st-key-theme_bulb button {{ background:#fff7d9 !important; color:#704f00 !important; border-color:#d6b66a !important; }}
     """
     st.markdown(
         """<style>
@@ -82,6 +93,12 @@ def open_calendar_content():
 
 def toggle_theme():
     st.session_state.theme_index = (int(st.session_state.get("theme_index", 0)) + 1) % len(THEMES)
+
+
+def theme_control():
+    current_theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]["name"]
+    st.button("💡", key="theme_bulb", on_click=toggle_theme, help=f"Current theme: {current_theme}. Click to cycle through all 7 themes.")
+    st.caption(f"Theme: {current_theme}")
 
 
 def creator_sign_out():
@@ -310,6 +327,9 @@ def ai_group_description(name, department, semester, language):
 def creator_login():
     if st.session_state.get("creator_authenticated"):
         return True
+    bulb_space, bulb_column = st.columns([12, 1])
+    with bulb_column:
+        theme_control()
     st.markdown("<div class='eyebrow'>PRIVATE CAMPUS ADMIN</div>", unsafe_allow_html=True)
     st.title("Creator Studio")
     st.write("This separate app is for authorized campus creators. Students cannot edit or view drafts here.")
@@ -371,8 +391,7 @@ with heading:
     st.markdown("<div class='eyebrow'>CAMPUSCONNECT · PRIVATE ADMIN</div>", unsafe_allow_html=True)
     st.title(page)
 with bulb:
-    current_theme = THEMES[int(st.session_state.get("theme_index", 0)) % len(THEMES)]["name"]
-    st.button("💡", key="theme_bulb", on_click=toggle_theme, help=f"Current theme: {current_theme}. Click to cycle through all 7 themes.")
+    theme_control()
 if page != "Creator dashboard":
     st.button("← Back to creator dashboard", on_click=back_to_dashboard)
 
