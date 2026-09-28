@@ -205,12 +205,27 @@ def render_ai_markdown(answer):
             if equation.startswith("[") and equation.endswith("]"):
                 equation = equation[1:-1].strip()
             line = f"$${equation}$$"
+            line = f"$$\n{equation}\n$$"
         else:
             # Make standalone raw math commands in explanatory sentences readable too.
             line = line.replace(r"\rho", "ρ").replace(r"\theta", "θ").replace(r"\pi", "π")
             line = line.replace(r"\times", "×").replace(r"\cdot", "·")
         rendered_lines.append(line)
     st.markdown("\n".join(rendered_lines))
+    text = "\n".join(rendered_lines)
+
+    # Render display equations with Streamlit's dedicated LaTeX renderer.
+    # st.markdown can leave literal $$...$$ visible for some response formats.
+    parts = re.split(r"(\$\$.*?\$\$)", text, flags=re.DOTALL)
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith("$$") and part.endswith("$$"):
+            equation = part[2:-2].strip()
+            if equation:
+                st.latex(equation)
+        else:
+            st.markdown(part)
 
 
 def show_post(post):
