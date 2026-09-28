@@ -83,59 +83,68 @@ def get_authenticated_client():
         return client, None, "Your session expired. Please sign in again."
 
 
-def email_code_callback(email, name="", create_account=False):
-    reset_email_code()
+def student_access_callback(name, email, password):
     url = secret("SUPABASE_URL")
     public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
+    client = create_client(url, public_key)
     try:
-        client = create_client(url, public_key)
-        options = {"should_create_user": bool(create_account)}
-        if create_account:
-            options["data"] = {"display_name": name.strip()}
-        client.auth.sign_in_with_otp({"email": email.strip(), "options": options})
-        st.session_state.pending_auth_email = email.strip()
-        st.session_state.pending_auth_name = name.strip() if create_account else ""
-        st.session_state.auth_notice = "If the email can sign in, a one-time code has been sent. Check your inbox and spam folder."
-    except Exception as exc:
-        message = str(exc).lower()
-        if "rate limit" in message or "email rate limit" in message:
-            st.session_state.auth_notice = "Supabase temporarily stopped sending sign-in emails because its email limit was reached. Wait for the limit to reset or configure a trusted SMTP provider in Supabase Auth settings."
-        else:
-            st.session_state.auth_notice = "Could not send the sign-in code. Check the email address and Supabase email settings, then try again."
-
-
-def verify_email_code_callback(code):
-    email = str(st.session_state.get("pending_auth_email", "")).strip()
-    if not email:
-        st.session_state.auth_notice = "Enter your email again to request a new sign-in code."
-        return
-    url = secret("SUPABASE_URL")
-    public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
-    try:
-        client = create_client(url, public_key)
-        response = client.auth.verify_otp({"email": email, "token": code.strip(), "type": "email"})
-        if save_auth_response(response, st.session_state.get("pending_auth_name", "")):
-            st.session_state.pop("pending_auth_email", None)
-            st.session_state.pop("pending_auth_name", None)
+        response = client.auth.sign_in_with_password({"email": email.strip(), "password": password})
+        if save_auth_response(response, name.strip()):
             st.session_state.nav_page = "Home"
-            st.session_state.auth_notice = "Email verified. Welcome to CampusConnect."
+            st.session_state.auth_notice = "Welcome back to CampusConnect."
+            return
+        raise RuntimeError("Supabase did not return a student session.")
+    except Exception as sign_in_error:
+        sign_in_message = str(sign_in_error).lower()
+        if "email not confirmed" in sign_in_message:
+            st.session_state.auth_notice = (
+                "This account was created before email confirmation was turned off and is still unconfirmed. "
+                "The app owner must confirm this existing account once in Supabase → Authentication → Users. "
+                "New accounts can then enter immediately."
+            )
+            return
+        credential_error = any(
+            marker in sign_in_message
+            for marker in ("invalid login credentials", "invalid_credentials", "user not found")
+        )
+        if not credential_error:
+            st.session_state.auth_notice = "CampusConnect could not reach student sign-in. Please try again in a moment."
+            return
+
+    try:
+        response = client.auth.sign_up({
+            "email": email.strip(),
+            "password": password,
+            "options": {"data": {"display_name": name.strip()}},
+        })
+        if save_auth_response(response, name.strip()):
+            st.session_state.nav_page = "Home"
+            st.session_state.auth_notice = "Your student account is ready. Welcome to CampusConnect."
         else:
-            st.session_state.auth_notice = "The code was accepted, but CampusConnect did not receive a session. Please request another code."
-    except Exception:
-        st.session_state.auth_notice = "That code did not work or has expired. Check it, or request a fresh code for this email."
-
-
-def reset_email_code():
-    st.session_state.pop("pending_auth_email", None)
-    st.session_state.pop("pending_auth_name", None)
-    st.session_state.pop("student_email_code", None)
+            st.session_state.auth_notice = (
+                "Your account request was received, but Supabase is waiting for email confirmation. "
+                "For immediate entry, the app owner needs to turn off Confirm email in Supabase Auth settings."
+            )
+    except Exception as signup_error:
+        message = str(signup_error).lower()
+        if "password" in message or "weak_password" in message:
+            st.session_state.auth_notice = "Choose a password that meets the password rules set in Supabase Auth, then try again."
+        elif "already registered" in message or "already been registered" in message:
+            st.session_state.auth_notice = (
+                "This email already has an account. Enter the same password you used when that account was created. "
+                "If your old account used email-code sign-in, ask the app owner to help set up a password for it."
+            )
+        else:
+            st.session_state.auth_notice = (
+                "CampusConnect could not sign in or create this account. Check the email and password, "
+                "and ask the app owner to check Supabase Auth settings if this is your first visit."
+            )
 
 
 def sign_out_callback():
     clear_login()
     st.session_state.pop("active_group_id", None)
     st.session_state.pop("last_logged_view_page", None)
-    reset_email_code()
     st.session_state.nav_page = "Home"
 
 
@@ -414,53 +423,25 @@ def show_login():
         theme_control()
     st.markdown("<div class='eyebrow'>STUDENT SIGN IN</div>", unsafe_allow_html=True)
     st.title("Welcome to CampusConnect")
-    st.write("Create your account once with your name and email. After that, sign in using your email and a one-time code—no password to remember.")
-    if st.session_state.get("auth_notice"):
-        st.info(st.session_state.pop("auth_notice"))
+    st.write("Enter your name, email, and a password. The first visit creates your account; next time, use the same email and password.")
+    auth_notice = st.session_state.pop("auth_notice", None)
+    if auth_notice and "sign-in failed" not in auth_notice.lower():
+        st.info(auth_notice)
     if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
         st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
         return
-    create_tab, sign_in_tab = st.tabs(["First time? Create account", "Returning student? Sign in"])
-    with create_tab:
-        st.caption("Enter your name and email once. We will email a verification code.")
-        with st.form("create_account_form"):
-            name = st.text_input("Your name", key="new_student_name")
-            email = st.text_input("Email address", key="new_student_email")
-            submitted = st.form_submit_button("Create account and email code", type="primary", use_container_width=True)
-        if submitted:
-            if not name.strip() or "@" not in email or "." not in email.rsplit("@", 1)[-1]:
-                st.warning("Enter your name and a valid email address.")
-            else:
-                email_code_callback(email, name, create_account=True)
-                st.rerun()
-    with sign_in_tab:
-        st.caption("Enter your registered email. We will send a one-time code—no password needed.")
-        with st.form("student_email_sign_in_form"):
-            email = st.text_input("Email address", key="returning_student_email")
-            submitted = st.form_submit_button("Email me a sign-in code", type="primary", use_container_width=True)
-        if submitted:
-            if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
-                st.warning("Enter a valid email address.")
-            else:
-                email_code_callback(email, create_account=False)
-                st.rerun()
-
-    pending_email = st.session_state.get("pending_auth_email")
-    if pending_email:
-        st.divider()
-        st.subheader("Enter your email code")
-        st.caption(f"A code was requested for {pending_email}. Check your inbox and spam folder.")
-        with st.form("verify_student_email_code_form"):
-            code = st.text_input("One-time code", max_chars=12, key="student_email_code")
-            verify = st.form_submit_button("Verify code and enter", type="primary", use_container_width=True)
-        if verify:
-            if len(code.strip()) < 4:
-                st.warning("Enter the code from your email.")
-            else:
-                verify_email_code_callback(code)
-                st.rerun()
-        st.button("Use a different email", on_click=reset_email_code, key="reset_student_email_code")
-
+    st.caption("First visit: this form creates your account. Later: use the same email and password. Supabase still enforces its password-length rule.")
+    with st.form("student_access_form"):
+        name = st.text_input("Your name", key="student_access_name")
+        email = st.text_input("Email address", key="student_access_email")
+        password = st.text_input("Choose a password and remember it", type="password", key="student_access_password")
+        submitted = st.form_submit_button("Continue to CampusConnect", type="primary", use_container_width=True)
+    if submitted:
+        if not name.strip() or "@" not in email or "." not in email.rsplit("@", 1)[-1] or not password:
+            st.warning("Enter your name, a valid email address, and a password.")
+        else:
+            student_access_callback(name, email, password)
+            st.rerun()
 
 apply_theme()
 client, auth_user, auth_error = get_authenticated_client()
