@@ -63,7 +63,10 @@ def get_authenticated_client():
     public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
     if not url or not public_key:
         return None, None, "Add SUPABASE_URL and SUPABASE_ANON_KEY to this app's Streamlit Secrets."
-    client = create_client(url, public_key)
+    try:
+        client = create_client(url, public_key)
+    except Exception:
+        return None, None, "CampusConnect could not initialize Supabase. Check that SUPABASE_URL is the project URL and the student key is the project's publishable/anon key."
     access = st.session_state.get("supabase_access_token")
     refresh = st.session_state.get("supabase_refresh_token")
     if not access or not refresh:
@@ -83,10 +86,37 @@ def get_authenticated_client():
         return client, None, "Your session expired. Please sign in again."
 
 
+def auth_setup_help(error):
+    """Turn common Supabase auth failures into safe, actionable hints; never echo secrets."""
+    message = str(error).lower()
+    if any(term in message for term in ("invalid api key", "invalid api_key", "invalid jwt", "unauthorized", "401")):
+        return (
+            "Supabase rejected the student app key. In this Streamlit app's Secrets, check SUPABASE_URL "
+            "and SUPABASE_ANON_KEY (or SUPABASE_PUBLISHABLE_KEY). Use the public/anon key, not the service-role key."
+        )
+    if any(term in message for term in ("connecterror", "connecttimeout", "readtimeout", "timed out", "network", "name or service not known")):
+        return "CampusConnect could not connect to Supabase. Check your internet, project URL, and Supabase project status, then retry."
+    if any(term in message for term in ("signups not allowed", "signup is disabled", "sign up is disabled", "user signups are disabled")):
+        return "New student accounts are disabled in Supabase. The app owner must enable email sign-ups under Authentication → Sign In / Providers → Email."
+    if any(term in message for term in ("rate limit", "email rate limit")):
+        return "Supabase temporarily limited account requests. Wait before retrying. Turning off Confirm email prevents signup confirmation emails for new accounts."
+    return (
+        "Supabase returned an unexpected authentication error. Check this app's SUPABASE_URL and public/anon key, "
+        "then open Supabase → Authentication logs to see the matching error. Never paste a service-role key into the student app."
+    )
+
+
 def student_access_callback(name, email, password):
     url = secret("SUPABASE_URL")
     public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
-    client = create_client(url, public_key)
+    if not url or not public_key:
+        st.session_state.auth_notice = "Student sign-in is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to this app's Streamlit Secrets."
+        return
+    try:
+        client = create_client(url, public_key)
+    except Exception as client_error:
+        st.session_state.auth_notice = auth_setup_help(client_error)
+        return
     try:
         response = client.auth.sign_in_with_password({"email": email.strip(), "password": password})
         if save_auth_response(response, name.strip()):
@@ -108,7 +138,7 @@ def student_access_callback(name, email, password):
             for marker in ("invalid login credentials", "invalid_credentials", "user not found")
         )
         if not credential_error:
-            st.session_state.auth_notice = "CampusConnect could not reach student sign-in. Please try again in a moment."
+            st.session_state.auth_notice = auth_setup_help(sign_in_error)
             return
 
     try:
@@ -135,10 +165,7 @@ def student_access_callback(name, email, password):
                 "If your old account used email-code sign-in, ask the app owner to help set up a password for it."
             )
         else:
-            st.session_state.auth_notice = (
-                "CampusConnect could not sign in or create this account. Check the email and password, "
-                "and ask the app owner to check Supabase Auth settings if this is your first visit."
-            )
+            st.session_state.auth_notice = auth_setup_help(signup_error)
 
 
 def sign_out_callback():
