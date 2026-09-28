@@ -1,0 +1,8 @@
+.streamlit/secrets.toml
+__pycache__/
+*.py[cod]
+.venv/
+.env
+campusconnect.db
+campusconnect.db-shm
+campusconnect.db-wal
