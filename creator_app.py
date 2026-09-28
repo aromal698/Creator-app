@@ -2,13 +2,17 @@
 
 from datetime import date, datetime, timedelta, timezone
 import base64
+from io import BytesIO
+import hashlib
 import hmac
 import os
 import re
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 import streamlit as st
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from supabase import create_client
 
 
@@ -44,9 +48,10 @@ def apply_theme():
         [data-testid="stSidebar"] { background:#edf3ef; }
         div.stButton > button { border-radius:12px; border-color:#176b5b; color:#14584c; font-weight:600; }
         div.stButton > button:hover { background:#e5f2ec; border-color:#14584c; color:#103f36; }
-        .st-key-theme_bulb { position:fixed; z-index:9999; top:0; right:1.2rem; width:48px; padding-top:18px; }
+        .st-key-theme_bulb { position:fixed; z-index:99999; top:3.35rem; right:1.2rem; width:48px; padding-top:18px; }
         .st-key-theme_bulb:before { content:''; position:absolute; top:0; left:50%; height:19px; border-left:2px solid #ae8d50; }
         .st-key-theme_bulb button { border-radius:50% 50% 45% 45%; width:48px; min-width:48px; height:48px; min-height:48px; padding:0; font-size:1.5rem; background:#fff7d9; border:2px solid #d6b66a; box-shadow:0 3px 12px #0003; }
+        .st-key-theme_bulb button:hover { background:#ffe894; box-shadow:0 5px 18px #9b741b55; transform:translateY(2px); }
         """ + dark_css + "</style>",
         unsafe_allow_html=True,
     )
@@ -150,6 +155,123 @@ def unpack_poster_draft(answer):
     return suggested_title, draft_text
 
 
+def poster_font(size, bold=False):
+    candidates = (
+        ["NotoSansMalayalam-Bold.ttf", "DejaVuSans-Bold.ttf", "Arial Bold.ttf"]
+        if bold else ["NotoSansMalayalam-Regular.ttf", "DejaVuSans.ttf", "Arial.ttf"]
+    )
+    for name in candidates:
+        try:
+            return ImageFont.truetype(name, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def wrap_poster_text(draw, text, font, max_width, max_lines=6):
+    words = str(text).replace("\n", " ").split()
+    lines, current = [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and draw.textbbox((0, 0), candidate, font=font)[2] > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1].rstrip("., ") + "…"
+    return lines
+
+
+def create_campus_poster(title, kind, event_day, audience, details, background_bytes=None):
+    """Create a shareable poster PNG from reviewed event details and an optional photo."""
+    width, height = 1080, 1350
+    image = Image.new("RGB", (width, height), "#f3f7f2")
+    draw = ImageDraw.Draw(image)
+    header_height = 540
+    if background_bytes:
+        background = Image.open(BytesIO(background_bytes)).convert("RGB")
+        background = ImageOps.fit(background, (width, header_height), method=Image.Resampling.LANCZOS)
+        image.paste(background, (0, 0))
+        shade = Image.new("RGBA", (width, header_height), (7, 48, 39, 155))
+        image.paste(shade, (0, 0), shade)
+        draw = ImageDraw.Draw(image)
+    else:
+        draw.rectangle((0, 0, width, header_height), fill="#14584b")
+        draw.ellipse((770, -230, 1240, 240), fill="#287966")
+        draw.ellipse((900, 290, 1190, 580), fill="#1c6a56")
+
+    white = "#ffffff"
+    dark = "#173d32"
+    draw.text((76, 68), f"CAMPUSCONNECT  /  {kind.upper()}", font=poster_font(28, True), fill="#d8f1df")
+    title_font = poster_font(68, True)
+    title_lines = wrap_poster_text(draw, title, title_font, 900, max_lines=3)
+    y = 155
+    for line in title_lines:
+        draw.text((76, y), line, font=title_font, fill=white, stroke_width=1, stroke_fill="#103e35")
+        y += 88
+    draw.rectangle((0, header_height, width, height), fill="#f3f7f2")
+
+    date_font = poster_font(34, True)
+    draw.rounded_rectangle((74, 590, 605, 672), radius=28, fill="#dcefe1")
+    draw.text((102, 610), f"DATE  ·  {event_day}", font=date_font, fill=dark)
+    draw.text((78, 715), f"FOR  ·  {audience}", font=poster_font(25, True), fill="#176b5b")
+
+    body_font = poster_font(31)
+    body_lines = wrap_poster_text(draw, details or "More details will be shared by the campus creator.", body_font, 920, max_lines=8)
+    y = 785
+    for line in body_lines:
+        draw.text((78, y), line, font=body_font, fill="#253a33")
+        y += 54
+
+    draw.rounded_rectangle((74, 1170, 1006, 1260), radius=24, fill="#14584b")
+    draw.text((105, 1194), "B.TECH STUDENT COMMUNITY  ·  CAMPUSCONNECT", font=poster_font(24, True), fill=white)
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def upload_poster(image_bytes, content_type="image/png"):
+    if not image_bytes:
+        return ""
+    extension = {"image/jpeg": "jpg", "image/webp": "webp", "image/png": "png"}.get(content_type, "png")
+    path = f"{uuid4().hex}.{extension}"
+    db.storage.from_("campus-posters").upload(
+        path,
+        image_bytes,
+        {"content-type": content_type, "cache-control": "3600", "upsert": "false"},
+    )
+    return db.storage.from_("campus-posters").get_public_url(path)
+
+
+def poster_fingerprint(kind, title, event_day, audience, details, background_bytes):
+    content = f"{kind}\n{title}\n{event_day}\n{audience}\n{details}".encode("utf-8")
+    if background_bytes:
+        content += hashlib.sha256(background_bytes).digest()
+    return hashlib.sha256(content).hexdigest()
+
+
+def current_new_poster(kind, title, event_day, audience, details, background, source_poster, attach_source):
+    background_bytes = background.getvalue() if background else None
+    fingerprint = poster_fingerprint(kind, title, event_day, audience, details, background_bytes)
+    generated = st.session_state.get("new_generated_poster")
+    if generated and st.session_state.get("new_generated_poster_fingerprint") == fingerprint:
+        return generated, "image/png"
+    if source_poster and attach_source:
+        return source_poster.getvalue(), source_poster.type or "image/png"
+    return b"", ""
+
+
+def upload_new_poster_asset(kind, title, event_day, audience, details, background, source_poster, attach_source):
+    image_bytes, content_type = current_new_poster(
+        kind, title, event_day, audience, details, background, source_poster, attach_source
+    )
+    return upload_poster(image_bytes, content_type) if image_bytes else ""
+
+
 def ai_draft(kind, title, event_day, audience, notes, language):
     return groq_generate_text(
         f"Draft a clear, concise campus {kind.lower()} for B.Tech students. Use only the provided facts. "
@@ -242,10 +364,25 @@ if page == "Creator dashboard":
     try:
         posts = db.table("campus_posts").select("id,status,kind").execute().data or []
         groups = db.table("campus_groups").select("id,is_active").execute().data or []
+        try:
+            views_total = db.table("campus_app_views").select("id", count="exact").execute().count or 0
+            day_start = datetime.combine(today, datetime.min.time(), tzinfo=INDIA_TZ).isoformat()
+            day_end = datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=INDIA_TZ).isoformat()
+            views_today = (
+                db.table("campus_app_views").select("id", count="exact")
+                .gte("created_at", day_start).lt("created_at", day_end).execute().count or 0
+            )
+        except Exception:
+            views_total, views_today = 0, 0
+            st.caption("Page-view totals appear after you run the updated Supabase schema.")
         m1, m2, m3 = st.columns(3)
         m1.metric("Notices & activities", len(posts))
         m2.metric("Drafts awaiting review", sum(1 for p in posts if p["status"] == "draft"))
         m3.metric("Active groups", sum(1 for g in groups if g["is_active"]))
+        m4, m5 = st.columns(2)
+        m4.metric("App page views", views_total)
+        m5.metric("Views today", views_today)
+        st.caption("Views count page openings by signed-in students, not unique students. No student identity or chat content is stored.")
         st.info("Create or edit notices and activities in the next section. Only published items appear in the student app; drafts stay here.")
         st.info("Published activities and special days also appear in the student Campus Calendar. AI can draft or rewrite wording; review it before publishing.")
         st.info("Manage starter groups, created groups, and group availability in Group admin.")
@@ -272,6 +409,7 @@ elif page == "Manage notices & activities":
     with new_tab:
         st.caption("Free AI drafts the wording. Review all facts before saving or publishing.")
         st.warning("Do not include personal student information in AI prompts. Check event time, place, date, and links before publishing.")
+        st.caption("Poster images attached to a published update are publicly viewable. Upload only artwork intended for campus-wide sharing.")
         kind = st.selectbox("Type", ["Notice", "Activity"], key="new_kind")
         title = st.text_input("Title", key="new_title")
         event_day = st.date_input("Date", value=today, key="new_date")
@@ -315,12 +453,57 @@ elif page == "Manage notices & activities":
             except Exception as exc:
                 st.error(f"Could not read this poster: {str(exc)[:400]}. You can still write the update manually.")
         body = st.text_area("Review and edit the final text", key="new_post_body", height=180)
+        poster_background = st.file_uploader(
+            "Optional photo for the poster picture",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="new_poster_background",
+            help="If supplied, this photo is used as the top background. It is uploaded publicly only when you save or publish the update.",
+        )
+        if poster_background:
+            st.image(poster_background, caption="Poster background photo", use_container_width=True)
+        if st.button("🎨 Create poster picture from these details", disabled=not title.strip() or not body.strip(), key="create_poster_picture"):
+            try:
+                background_bytes = poster_background.getvalue() if poster_background else None
+                st.session_state["new_generated_poster"] = create_campus_poster(
+                    title.strip(), kind, event_day.strftime("%d %B %Y"), audience, body.strip(), background_bytes
+                )
+                st.session_state["new_generated_poster_fingerprint"] = poster_fingerprint(
+                    kind, title.strip(), event_day.isoformat(), audience, body.strip(), background_bytes
+                )
+            except Exception as exc:
+                st.error(f"Could not create the poster image: {str(exc)[:300]}")
+        displayed_poster = st.session_state.get("new_generated_poster")
+        current_fingerprint = poster_fingerprint(
+            kind, title.strip(), event_day.isoformat(), audience, body.strip(),
+            poster_background.getvalue() if poster_background else None,
+        )
+        if displayed_poster and st.session_state.get("new_generated_poster_fingerprint") == current_fingerprint:
+            st.image(displayed_poster, caption="Poster preview — this image will be attached to the update.", use_container_width=True)
+            st.download_button(
+                "Download poster PNG",
+                data=displayed_poster,
+                file_name="campusconnect-poster.png",
+                mime="image/png",
+                key=f"download_poster_{current_fingerprint[:12]}",
+            )
+        elif displayed_poster:
+            st.warning("You changed the event details after creating the picture. Create the poster again so it matches the final text.")
+        attach_uploaded_poster = st.checkbox(
+            "Attach the uploaded event poster to the student update if no generated picture is current",
+            value=True,
+            key="attach_source_poster",
+            disabled=not poster,
+        )
         c1, c2 = st.columns(2)
         is_important = c1.checkbox("Pin as an important notice", disabled=(kind != "Notice"), key="new_important")
         is_special = c2.checkbox("Highlight as a special day", disabled=(kind != "Activity"), key="new_special")
         b1, b2 = st.columns(2)
         if b1.button("Save as draft", key="new_save_draft", disabled=not title.strip() or not body.strip()):
             try:
+                poster_url = upload_new_poster_asset(
+                    kind, title.strip(), event_day.isoformat(), audience, body.strip(),
+                    poster_background, poster, attach_uploaded_poster,
+                )
                 db.table("campus_posts").insert(
                     {
                         "kind": kind,
@@ -332,13 +515,18 @@ elif page == "Manage notices & activities":
                         "status": "draft",
                         "is_important": bool(is_important and kind == "Notice"),
                         "is_special": bool(is_special and kind == "Activity"),
+                        "poster_url": poster_url or None,
                     }
                 ).execute()
                 st.success("Draft saved privately in Creator Studio.")
             except Exception:
-                st.error("Could not save the draft. Check the Supabase table setup.")
+                st.error("Could not save the draft or poster. Check the Supabase tables and campus-posters storage bucket setup.")
         if b2.button("Publish to student app", type="primary", key="new_publish", disabled=not title.strip() or not body.strip()):
             try:
+                poster_url = upload_new_poster_asset(
+                    kind, title.strip(), event_day.isoformat(), audience, body.strip(),
+                    poster_background, poster, attach_uploaded_poster,
+                )
                 db.table("campus_posts").insert(
                     {
                         "kind": kind,
@@ -350,11 +538,12 @@ elif page == "Manage notices & activities":
                         "status": "published",
                         "is_important": bool(is_important and kind == "Notice"),
                         "is_special": bool(is_special and kind == "Activity"),
+                        "poster_url": poster_url or None,
                     }
                 ).execute()
                 st.success("Published. Students will see it on the home page and in the relevant section.")
             except Exception:
-                st.error("Could not publish the update. Check the Supabase table setup.")
+                st.error("Could not publish the update or poster. Check the Supabase tables and campus-posters storage bucket setup.")
 
     with edit_tab:
         try:
@@ -373,6 +562,18 @@ elif page == "Manage notices & activities":
                 format_func=lambda value: f"{by_id[value]['kind']} · {by_id[value]['title']} · {by_id[value]['status']}",
             )
             item = by_id[selected_id]
+            if item.get("poster_url"):
+                st.image(item["poster_url"], caption="Current poster shown to students", use_container_width=True)
+            replacement_poster = st.file_uploader(
+                "Upload a replacement poster (optional)",
+                type=["png", "jpg", "jpeg", "webp"],
+                key=f"edit_poster_{selected_id}",
+            )
+            if replacement_poster and replacement_poster.size > 8 * 1024 * 1024:
+                st.warning("Please use a poster image smaller than 8 MB.")
+                replacement_poster = None
+            if replacement_poster:
+                st.image(replacement_poster, caption="Replacement poster preview", use_container_width=True)
             title_key, body_key = f"edit_title_{selected_id}", f"edit_body_{selected_id}"
             edit_title = st.text_input("Title", value=item["title"], key=title_key)
             edit_kind = st.selectbox("Type", ["Notice", "Activity"], index=0 if item["kind"] == "Notice" else 1, key=f"edit_kind_{selected_id}")
@@ -400,21 +601,22 @@ elif page == "Manage notices & activities":
             edit_special = st.checkbox("Highlight as a special day", value=bool(item["is_special"]), disabled=(edit_kind != "Activity"), key=f"edit_special_{selected_id}")
             if st.button("Save changes", type="primary", key=f"edit_save_{selected_id}"):
                 try:
-                    db.table("campus_posts").update(
-                        {
-                            "title": edit_title.strip(),
-                            "kind": edit_kind,
-                            "body": edit_body.strip(),
-                            "event_date": edit_date.isoformat(),
-                            "audience": edit_audience,
-                            "status": edit_status,
-                            "is_important": bool(edit_important and edit_kind == "Notice"),
-                            "is_special": bool(edit_special and edit_kind == "Activity"),
-                        }
-                    ).eq("id", selected_id).execute()
+                    changes = {
+                        "title": edit_title.strip(),
+                        "kind": edit_kind,
+                        "body": edit_body.strip(),
+                        "event_date": edit_date.isoformat(),
+                        "audience": edit_audience,
+                        "status": edit_status,
+                        "is_important": bool(edit_important and edit_kind == "Notice"),
+                        "is_special": bool(edit_special and edit_kind == "Activity"),
+                    }
+                    if replacement_poster:
+                        changes["poster_url"] = upload_poster(replacement_poster.getvalue(), replacement_poster.type)
+                    db.table("campus_posts").update(changes).eq("id", selected_id).execute()
                     st.success("Update saved.")
                 except Exception:
-                    st.error("Could not save changes. Check the database connection.")
+                    st.error("Could not save changes or poster. Check the database connection and campus-posters bucket.")
             confirm_delete = st.checkbox("I understand this permanently deletes the selected update", key=f"confirm_post_delete_{selected_id}")
             if st.button("Delete update", disabled=not confirm_delete, key=f"delete_post_{selected_id}"):
                 try:
