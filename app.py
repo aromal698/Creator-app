@@ -259,6 +259,24 @@ def groq_browser_search(question):
     )
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def campus_quote_of_the_day(day_key):
+    """Create one original, unattributed campus study quote per day for all visitors."""
+    answer, _ = groq_completion(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "Write one short, original inspirational line for engineering students. "
+                    "Do not quote or attribute it to a real person. Return only the line, without quotation marks."
+                ),
+            },
+            {"role": "user", "content": f"Create today's fresh campus study thought for {day_key}."},
+        ]
+    )
+    return answer.strip().strip('"“”')
+
+
 @st.fragment(run_every=8)
 def render_group_chat_messages(database, group_id, user_id, display_name):
     try:
@@ -290,8 +308,9 @@ def apply_theme():
     .stApp { background:#101a16 !important; color:#e7eee9; }
     [data-testid="stSidebar"] { background:#17251f !important; }
     h1,h2,h3,p,label,[data-testid="stMarkdownContainer"] { color:#e7eee9; }
-    .hero,.date-card { background:#20392d; border-color:#315542; color:#e7eee9; }
+    .hero,.date-card,.quote-card { background:#20392d; border-color:#315542; color:#e7eee9; }
     .hero h2,.hero p { color:#e7eee9; }
+    .quote-text,.quote-note { color:#e7eee9 !important; }
     [data-testid="stMetric"] { background:#1b2b23; border-color:#315542; }
     .chat-other { background:#26342c; color:#e7eee9; }
     """ if st.session_state.get("dark_theme") else ""
@@ -305,6 +324,14 @@ def apply_theme():
         .hero h2 { margin:0 0 .5rem; color:#153b33; font-size:2rem; }
         .hero p { color:#334e47; margin:0; line-height:1.65; max-width:760px; }
         .date-card { background:#edf5ef; border-left:5px solid #176b5b; padding:1rem 1.25rem; border-radius:12px; }
+        .quote-card { text-align:center; background:linear-gradient(135deg,#e6f3e9,#f7f6e9); border:1px solid #c8dfce; border-radius:22px; padding:1.3rem 1.8rem; margin:.6rem 0 1.3rem; box-shadow:0 8px 24px #1d553010; }
+        .quote-label { color:#176b5b; font-weight:700; font-size:.7rem; letter-spacing:.15em; margin-bottom:.45rem; }
+        .quote-text { color:#173d32; font-family:'Manrope',sans-serif; font-size:1.2rem; line-height:1.5; }
+        .quote-note { color:#577065; font-size:.8rem; margin-top:.45rem; }
+        .chat-header { display:flex; align-items:center; gap:.85rem; background:#e7f3ec; border:1px solid #d3e6d9; padding:.8rem 1rem; border-radius:18px; margin:.4rem 0 1rem; }
+        .chat-avatar { display:grid; place-items:center; width:42px; height:42px; flex:0 0 42px; border-radius:50%; background:#176b5b; color:white; font-weight:700; }
+        .chat-header-title { color:#173d32; font-weight:700; }
+        .chat-header-subtitle { color:#577065; font-size:.82rem; }
         [data-testid="stSidebar"] { background:#edf3ef; }
         div.stButton > button { border-radius:12px; border-color:#176b5b; color:#14584c; font-weight:600; }
         div.stButton > button:hover { background:#e5f2ec; border-color:#14584c; color:#103f36; }
@@ -314,9 +341,13 @@ def apply_theme():
         .chat-own { margin-left:auto; background:#d9fdd3; border-bottom-right-radius:4px; color:#15251b; }
         .chat-other { margin-right:auto; background:#fff; border-bottom-left-radius:4px; color:#15251b; }
         .chat-meta { font-size:.72rem; opacity:.7; margin-bottom:.25rem; }
-        .st-key-theme_bulb { position:fixed; z-index:9999; top:0; right:1.5rem; padding-top:20px; }
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] { gap:.42rem; }
+        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] { border:1px solid #d6e4da; border-radius:999px; padding:.48rem .8rem; background:#f8fbf8; box-shadow:0 2px 5px #183c2b0b; transition:all .16s ease; }
+        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover { background:#e6f3e9; border-color:#8ab59a; transform:translateY(-1px); }
+        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) { background:#d9eee0; border-color:#4b9870; box-shadow:0 3px 8px #1c59331c; }
+        .st-key-theme_bulb { position:fixed; z-index:9999; top:0; right:1.2rem; width:48px; padding-top:18px; }
         .st-key-theme_bulb:before { content:''; position:absolute; top:0; left:50%; height:19px; border-left:2px solid #ae8d50; }
-        .st-key-theme_bulb button { border-radius:0 0 22px 22px; min-width:54px; min-height:46px; font-size:1.45rem; background:#fff7d9; border:1px solid #d6b66a; box-shadow:0 3px 12px #0002; }
+        .st-key-theme_bulb button { border-radius:50% 50% 45% 45%; width:48px; min-width:48px; height:48px; min-height:48px; padding:0; font-size:1.5rem; background:#fff7d9; border:2px solid #d6b66a; box-shadow:0 3px 12px #0003; }
         """ + dark_css + "</style>",
         unsafe_allow_html=True,
     )
@@ -418,6 +449,32 @@ if page == "Home":
         m1.metric("Study groups", len(groups))
         m2.metric("Groups you joined", len(mine))
         m3.metric("Activities today", len(today_activities))
+        st.subheader("📌 Campus notices")
+        if notices:
+            featured_notices = sorted(
+                notices,
+                key=lambda p: (bool(p.get("is_important")), str(p.get("created_at", ""))),
+                reverse=True,
+            )
+            for post in featured_notices[:4]:
+                show_post(post)
+        else:
+            st.info("Published campus notices will appear here.")
+
+        try:
+            daily_quote = campus_quote_of_the_day(today_iso)
+        except Exception:
+            daily_quote = ""
+        if daily_quote:
+            _, quote_column, _ = st.columns([1, 6, 1])
+            with quote_column:
+                st.markdown(
+                    f"<div class='quote-card'><div class='quote-label'>✦ AI-GENERATED CAMPUS THOUGHT</div><div class='quote-text'>“{escape(daily_quote)}”</div><div class='quote-note'>An original thought for today · {today.strftime('%d %B')}</div></div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("Today's AI campus thought is unavailable right now. Try again later.")
+
         left, right = st.columns([1.1, 0.9])
         with left:
             st.subheader("📅 Today's campus activities")
@@ -433,18 +490,6 @@ if page == "Home":
             else:
                 st.info("No special day has been highlighted today.")
         with right:
-            st.subheader("📌 Important campus notices")
-            if important:
-                for post in sorted(important, key=lambda p: str(p["event_date"]), reverse=True)[:5]:
-                    show_post(post)
-            else:
-                st.info("No important notices have been posted.")
-            st.subheader("📰 Latest notices")
-            if notices:
-                for post in sorted(notices, key=lambda p: str(p["created_at"]), reverse=True)[:5]:
-                    show_post(post)
-            else:
-                st.info("Published campus notices will appear here.")
             upcoming = [p for p in all_posts if p["kind"] == "Activity" and str(p["event_date"])[:10] >= today_iso]
             st.subheader("🗓️ Coming up on campus")
             if upcoming:
@@ -453,6 +498,14 @@ if page == "Home":
             else:
                 st.caption("No upcoming activities have been posted.")
             st.button("View campus calendar →", on_click=lambda: st.session_state.update(nav_page="Campus Calendar"))
+            community_url = str(secret("WHATSAPP_COMMUNITY_URL", "")).strip()
+            channel_url = str(secret("WHATSAPP_CHANNEL_URL", "")).strip()
+            if community_url.startswith("https://") or channel_url.startswith("https://"):
+                st.subheader("💬 WhatsApp campus spaces")
+                if community_url.startswith("https://"):
+                    st.link_button("Join WhatsApp Community", community_url, use_container_width=True)
+                if channel_url.startswith("https://"):
+                    st.link_button("Follow WhatsApp Channel", channel_url, use_container_width=True)
     except Exception:
         st.error("Campus data could not be loaded. Check that the Supabase tables and student access policies are set up.")
 
@@ -540,6 +593,13 @@ elif page == "Group Chat":
         active = st.session_state.get("active_group_id")
         idx = ids.index(active) if active in ids else 0
         group_id = st.selectbox("Choose a group chat", ids, index=idx, format_func=lambda value: by_id[value]["name"])
+        current_group = by_id[group_id]
+        initials = escape("".join(part[0] for part in str(current_group["name"]).split()[:2]).upper()) or "G"
+        group_title = escape(str(current_group["name"]))
+        st.markdown(
+            f"<div class='chat-header'><div class='chat-avatar'>{initials}</div><div><div class='chat-header-title'>{group_title}</div><div class='chat-header-subtitle'>{escape(str(current_group['department']))} · WhatsApp-style group chat</div></div></div>",
+            unsafe_allow_html=True,
+        )
         st.caption("Only signed-in group members can read and send messages. This chat refreshes about every 8 seconds while open.")
         render_group_chat_messages(client, group_id, uid, name)
 
