@@ -2,7 +2,7 @@
 
 A two-app Streamlit campus community for B.Tech students. Both apps use one Supabase database.
 
-- `app.py` — student app: a simple sign-in-first screen, pebble-style navigation, join-to-chat groups, WhatsApp-style chats, front-page campus notices, daily AI study thought, activities, calendar, AI study buddy, web search, WhatsApp links, and feedback.
+- `app.py` — student app: a create-account-first welcome screen with a sign-in option for returning students, seven bulb-cycled color themes, pebble-style navigation, join-to-chat groups, WhatsApp-style chats, front-page campus notices, daily AI study thought, activities, calendar, AI study buddy, web search, WhatsApp links, and feedback.
 - `creator_app.py` — separate password-protected Creator Studio: AI-assisted notice/activity/calendar drafts, poster reading and poster creation/upload, special-day highlighting, public campus links, publish/edit/delete, group administration, and anonymous page-view totals.
 - `supabase_schema.sql` — shared tables, initial department and semester groups, campus links, anonymous page-view counts, poster storage bucket, and student access policies.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
@@ -35,7 +35,7 @@ Create your WhatsApp Community and Channel, then copy their invite/share URLs. A
 
 ## 4. Student login, page views, and notice posters
 
-- Students see **Sign in** first. New students can expand **New to CampusConnect? Create a student account** underneath it. Existing Supabase accounts continue to work.
+- First-time students create an account with their name, email, and password. Returning students expand **Already have an account? Sign in** and use that same email and password. Do not create another account each time. Passwords are handled by Supabase Auth, not stored in the app's own tables.
 - The creator dashboard counts app page openings in **App page views** and **Views today**. These are not unique-student counts: returning to the same page during one login session is counted once. The log stores only the page name and timestamp, not a student ID, email, or chat message.
 - In **Creator Studio → Manage notices & activities**, add event details, optionally upload a photo, then select **Create poster picture from these details**. You can also upload a finished poster and attach it directly. Review the preview, then save or publish. Students see the attached image with the notice/activity.
 - Poster image storage uses a public Supabase Storage bucket so student browsers can display images. Upload only artwork intended to be public. An uploaded background photo is sent to Supabase only when saving or publishing; poster reading sends the selected file to Groq only after you confirm in the app.
@@ -107,6 +107,7 @@ The Creator Studio password is shared in this starter version. Anyone who has it
 - **AI Study Buddy, AI Search, and Creator Studio drafting** use Groq's `openai/gpt-oss-20b`; AI Search enables the built-in browser search tool. Search results and AI answers can still be incomplete or wrong. [Groq model and browser search docs](https://console.groq.com/docs/tool-use/built-in-tools/browser-search).
 - Groq's free plan is rate-limited. Because every student shares this app's API key, a public app can use up its free quota; check the current limits before sharing widely. [Groq rate limits](https://console.groq.com/docs/rate-limits).
 - Feedback is the final page in the student navigation. Every non-home page has a Back to home button.
-- The hanging bulb at top-right switches between light and dark themes.
+- Click the hanging bulb at top-right to cycle through seven color themes: White, Dark, Blue, Purple, Amber, Rose, and Teal. Hover over it to see the current theme.
+- The student Home page places one pinned important notice in a box in the upper-right half, beside the date card.
 
 Before a campus-wide launch, configure college email verification, protect Creator Studio credentials, review the access policies, and try the apps with separate student accounts. Never put private information in a public calendar or AI prompt.
