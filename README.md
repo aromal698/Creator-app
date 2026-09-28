@@ -2,12 +2,12 @@
 
 A two-app Streamlit campus community for B.Tech students. Both apps use one Supabase database.
 
-- `app.py` — student app: accounts, groups, group chats, campus notices, activities, calendar, AI study buddy, web search, WhatsApp links, and feedback.
-- `creator_app.py` — separate password-protected Creator Studio: AI-assisted notice/activity drafts, special-day highlighting, publish/edit/delete, and AI-assisted group administration.
+- `app.py` — student app: accounts, pebble-style navigation, join-to-chat groups, WhatsApp-style chats, front-page campus notices, daily AI study thought, activities, calendar, AI study buddy, web search, WhatsApp links, and feedback.
+- `creator_app.py` — separate password-protected Creator Studio: AI-assisted notice/activity/calendar drafts, special-day highlighting, publish/edit/delete, and AI-assisted group administration.
 - `supabase_schema.sql` — shared tables, initial department and semester groups, and student access policies.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
 
-Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Groq free-tier AI helps with study explanations, web search, and creator drafts. A creator reviews content before publishing. AI cannot guarantee factual accuracy. Free access has usage limits, and all app users share the app owner's quota.
+Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Groq free-tier AI helps with study explanations, web search, the daily original campus thought, and creator drafts. A creator reviews content before publishing. AI cannot guarantee factual accuracy. Free access has usage limits, and all app users share the app owner's quota.
 
 ## 1. Create the shared database
 
@@ -19,7 +19,7 @@ Student pages show published campus content. Creator drafts and edit controls re
 
 ## 2. Create a public campus Google Calendar (optional)
 
-The app calendar always lists creator-published events saved in Supabase. Each event has an **Add to Google Calendar** link. You can also embed a public Google Calendar to show campus holidays or other dates maintained in Google Calendar.
+The app calendar always lists creator-published events saved in Supabase. Creators manage these from **Creator Studio → Manage campus calendar** or **Manage notices & activities**; activity dates and special-day flags appear in the student calendar. Each event has an **Add to Google Calendar** link. You can also embed a public Google Calendar to show campus holidays or other dates maintained in Google Calendar.
 
 1. Create/select a campus calendar in Google Calendar and add the special dates/events you want to share.
 2. Make it public only if the calendar is safe for all students and the public to see. Google notes an embedded calendar is only visible to people with permission unless it is public.
