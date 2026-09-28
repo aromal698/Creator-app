@@ -184,50 +184,38 @@ def groq_completion(messages, use_browser_search=False):
 
 
 def render_ai_markdown(answer):
-    """Render common LaTeX math returned by AI as readable Streamlit math."""
+    """Turn common AI LaTeX fragments into readable plain-text math before display."""
     text = str(answer or "")
-    # Streamlit understands math enclosed in $...$ or $$...$$. Many models
-    # instead return the equivalent LaTeX delimiters used in other viewers.
-    text = text.replace(r"\[", "\n$$\n").replace(r"\]", "\n$$\n")
-    text = text.replace(r"\(", "$").replace(r"\)", "$")
+    # Convert TeX fractions, units, symbols and powers to text that stays
+    # understandable even when a Markdown/LaTeX renderer is unavailable.
+    text = re.sub(r"\\(?:text|mathrm|operatorname)\{([^{}]*)\}", r"\1", text)
+    text = re.sub(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"\1/\2", text)
+    text = re.sub(r"\\frac\s*([0-9])([0-9])", r"\1/\2", text)
+    text = re.sub(r"\\sqrt\{([^{}]*)\}", r"√(\1)", text)
+    text = re.sub(r"\\dot\{([^{}]*)\}", r"\1̇", text)
 
-    rendered_lines = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        # Repair bare display equations such as: [ p + \frac{1}{2}\rho v^{2} = ... ]
-        has_bare_latex = bool(
-            re.search(r"\\(?:frac|rho|theta|pi|sqrt|sum|int|text|cdot|times|Delta|alpha|beta|dot|Rightarrow)", stripped)
-        )
-        equation_shaped = bool(re.fullmatch(r"[\w\\{}^_ +\-*/=().,]+", stripped))
-        if (
-            stripped
-            and not stripped.startswith(("$", "- ", "* ", ">", "```"))
-            and has_bare_latex
-            and ("=" in stripped or equation_shaped)
-        ):
-            equation = stripped
-            if equation.startswith("[") and equation.endswith("]"):
-                equation = equation[1:-1].strip()
-            line = f"$$\n{equation}\n$$"
-        else:
-            # Make standalone raw math commands in explanatory sentences readable too.
-            line = line.replace(r"\rho", "ρ").replace(r"\theta", "θ").replace(r"\pi", "π")
-            line = line.replace(r"\times", "×").replace(r"\cdot", "·")
-        rendered_lines.append(line)
-    text = "\n".join(rendered_lines)
+    superscripts = str.maketrans("0123456789+-=()in", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁱⁿ")
+    subscripts = str.maketrans("0123456789+-=()", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎")
+    text = re.sub(r"\^\{([^{}]+)\}", lambda m: m.group(1).translate(superscripts), text)
+    text = re.sub(r"_\{([^{}]+)\}", lambda m: m.group(1).translate(subscripts), text)
+    text = re.sub(r"\^([0-9+-])", lambda m: m.group(1).translate(superscripts), text)
+    text = re.sub(r"_([0-9])", lambda m: m.group(1).translate(subscripts), text)
 
-    # Render display equations with Streamlit's dedicated LaTeX renderer.
-    # st.markdown can leave literal $$...$$ visible for some response formats.
-    parts = re.split(r"(\$\$.*?\$\$)", text, flags=re.DOTALL)
-    for part in parts:
-        if not part:
-            continue
-        if part.startswith("$$") and part.endswith("$$"):
-            equation = part[2:-2].strip()
-            if equation:
-                st.latex(equation)
-        else:
-            st.markdown(part)
+    replacements = {
+        r"\rho": "ρ", r"\theta": "θ", r"\pi": "π", r"\alpha": "α",
+        r"\beta": "β", r"\Delta": "Δ", r"\times": "×", r"\cdot": "·",
+        r"\Rightarrow": "⇒", r"\rightarrow": "→", r"\pm": "±", r"\approx": "≈",
+        r"\le": "≤", r"\ge": "≥", r"\,": " ", r"\;": " ", r"\!": "",
+        r"\ ": " ",
+    }
+    for latex, readable in replacements.items():
+        text = text.replace(latex, readable)
+    # Remove math wrappers and common layout-only TeX commands; keep the formula itself.
+    text = re.sub(r"\\(?:left|right|displaystyle)\b", "", text)
+    text = text.replace(r"\(", "").replace(r"\)", "")
+    text = text.replace(r"\[", "").replace(r"\]", "")
+    text = text.replace("$$", "").replace("$", "")
+    st.markdown(text)
 
 
 def show_post(post):
@@ -259,8 +247,8 @@ def groq_browser_search(question):
                 "content": (
                     "You are CampusConnect's research helper. Use the browser search tool, answer clearly, "
                     "cite sources in your response, note uncertainty, and never claim certainty beyond sources. "
-                    "For equations, use standard LaTeX wrapped in $...$ for inline math or put the equation alone between $$ delimiters. "
-                    "Never show raw LaTeX commands such as \\frac or \\rho without math delimiters. "
+                    "Never use LaTeX markup, dollar-sign math delimiters, or backslash commands. Write equations as plain text using readable symbols and units, "
+                    "for example: p + (1/2) × ρ × v² + ρ × g × z = constant; explain each symbol. "
                     "After each important equation, explain in plain words what it means and define every symbol. "
                     "Use ordinary numbered citations like [1] only; never expose internal reference markers such as [1†L8-L11]."
                 ),
@@ -656,7 +644,10 @@ elif page == "AI Study Buddy":
     chat = st.session_state.setdefault("study_chat", [])
     for message in chat:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            if message["role"] == "assistant":
+                render_ai_markdown(message["content"])
+            else:
+                st.markdown(message["content"])
     question = st.chat_input("Ask something you are learning…")
     if question:
         chat.append({"role": "user", "content": question})
@@ -677,8 +668,8 @@ elif page == "AI Study Buddy":
                                     "You are CampusConnect's friendly B.Tech study buddy. Explain step by step, "
                                     "give assignment hints rather than dishonest submissions, and say when uncertain. "
                                     f"Reply in {response_language}. For Manglish, write Malayalam words using English/Latin letters, not Malayalam script. "
-                                    "For equations, use standard LaTeX wrapped in $...$ for inline math or put each display equation alone between $$ delimiters. "
-                                    "Never show raw LaTeX commands such as \\frac or \\rho without math delimiters. "
+                                    "Never use LaTeX markup, dollar-sign math delimiters, or backslash commands. Write equations as plain text using readable symbols and units, "
+                                    "for example: F = k × x; k = 250 N/m; x = 0.08 m. "
                                     "Then explain the equation in simple words, define each symbol with its unit when applicable, "
                                     "and show a small worked example when useful."
                                 ),
