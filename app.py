@@ -6,6 +6,7 @@ import os
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from supabase import create_client
@@ -136,22 +137,49 @@ def join_group_callback(group_id):
         go_to_chat(group_id)
 
 
-def draft_notice_with_gemini(kind, title, event_day, audience, notes):
-    key = secret("GEMINI_API_KEY")
-    if not key:
-        return None
-    from google import genai
+def groq_completion(messages, use_browser_search=False):
+    """Call Groq's free-tier API; web search is enabled only for AI Search."""
+    api_key = str(secret("GROQ_API_KEY", "")).strip()
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is missing from this app's Streamlit Secrets.")
 
-    client = genai.Client(api_key=key)
-    response = client.models.generate_content(
-        model=secret("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-        contents=(
-            f"Write a concise campus {kind.lower()} for B.Tech students. Use only these facts; do not invent details. "
-            "If time, venue, registration, or contact details are missing, add [creator: add details]. Return only the draft.\n"
-            f"Title: {title}\nDate: {event_day}\nAudience: {audience}\nCreator notes: {notes or 'None'}"
-        ),
+    payload = {
+        "model": secret("GROQ_MODEL", "openai/gpt-oss-20b"),
+        "messages": messages,
+        "max_completion_tokens": 1400,
+        "reasoning_effort": "low",
+    }
+    if use_browser_search:
+        payload["tools"] = [{"type": "browser_search"}]
+        payload["tool_choice"] = "required"
+
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=90,
     )
-    return response.text
+    try:
+        result = response.json()
+    except ValueError:
+        result = {}
+    if not response.ok:
+        error = result.get("error", {}) if isinstance(result, dict) else {}
+        message = error.get("message", response.text[:400]) if isinstance(error, dict) else str(error)
+        raise RuntimeError(f"Groq API returned HTTP {response.status_code}: {message}")
+
+    message = result["choices"][0]["message"]
+    answer = message.get("content") or "I couldn't create an answer. Try a more specific question."
+    sources = []
+    for tool in message.get("executed_tools") or []:
+        search_results = tool.get("search_results") or {}
+        rows = search_results.get("results", []) if isinstance(search_results, dict) else search_results
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and row.get("url"):
+                    sources.append({"title": row.get("title") or "Web source", "url": row["url"]})
+    unique_sources = {source["url"]: source for source in sources}
+    return answer, list(unique_sources.values())
 
 
 def show_post(post):
@@ -174,29 +202,21 @@ def google_calendar_event_url(post):
     return f"https://calendar.google.com/calendar/render?{query}"
 
 
-def gemini_google_search(question):
-    """Ask Gemini with Google Search grounding and return answer plus source links."""
-    from google import genai
-    from google.genai import types
-
-    gemini = genai.Client(api_key=secret("GEMINI_API_KEY"))
-    response = gemini.models.generate_content(
-        model=secret("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-        contents=question,
-        config=types.GenerateContentConfig(
-            system_instruction="Answer clearly using web search for factual/current questions. Say when sources disagree or details are uncertain. Never claim certainty beyond your sources.",
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-        ),
+def groq_browser_search(question):
+    """Answer a question using Groq's GPT-OSS model and built-in browser search."""
+    return groq_completion(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are CampusConnect's research helper. Use the browser search tool, answer clearly, "
+                    "cite sources in your response, note uncertainty, and never claim certainty beyond sources."
+                ),
+            },
+            {"role": "user", "content": question},
+        ],
+        use_browser_search=True,
     )
-    sources = []
-    for candidate in getattr(response, "candidates", []) or []:
-        metadata = getattr(candidate, "grounding_metadata", None)
-        for chunk in getattr(metadata, "grounding_chunks", []) or []:
-            web = getattr(chunk, "web", None)
-            if web and getattr(web, "uri", None):
-                sources.append({"title": getattr(web, "title", "Source"), "url": web.uri})
-    unique = {source["url"]: source for source in sources}
-    return response.text or "I couldn't create an answer. Try a more specific question.", list(unique.values())
 
 
 @st.fragment(run_every=8)
@@ -520,25 +540,26 @@ elif page == "Campus Calendar":
         st.info("Optional: configure GOOGLE_CALENDAR_EMBED_URL in Streamlit Secrets to embed your public campus Google Calendar here.")
 
 elif page == "AI Search":
-    st.caption("Ask a question that needs current web information. Gemini uses Google Search and provides source links when available.")
+    st.caption("Ask a question that needs current web information. Free-tier Groq AI searches the web and provides sources when available.")
     st.info("AI answers can still be wrong or out of date. Verify important academic, medical, legal, or safety information with an official source.")
+    st.warning("Don't enter personal, sensitive, or confidential information. Free-tier requests are subject to usage limits.")
     with st.form("ai_search_form"):
         search_question = st.text_input("What do you want to find?", placeholder="e.g. Explain recent advances in battery recycling")
-        search_submit = st.form_submit_button("🔎 Search with Gemini", type="primary")
+        search_submit = st.form_submit_button("🔎 Search with free AI", type="primary")
     if search_submit:
         if not search_question.strip():
             st.warning("Enter a question to search.")
-        elif not secret("GEMINI_API_KEY"):
-            st.error("Gemini search is not configured. Add GEMINI_API_KEY to the student app's Streamlit Secrets.")
+        elif not secret("GROQ_API_KEY"):
+            st.error("Free AI is not configured. Add GROQ_API_KEY to the student app's Streamlit Secrets.")
         else:
             with st.spinner("Searching the web and preparing an answer…"):
                 try:
-                    answer, sources = gemini_google_search(search_question.strip())
+                    answer, sources = groq_browser_search(search_question.strip())
                     st.session_state.ai_search_result = {"question": search_question.strip(), "answer": answer, "sources": sources}
                 except Exception as exc:
-                    key = str(secret("GEMINI_API_KEY", ""))
+                    key = str(secret("GROQ_API_KEY", ""))
                     detail = str(exc).replace(key, "[hidden API key]") if key else str(exc)
-                    st.error(f"Gemini Search failed ({type(exc).__name__}). Details: {detail[:500]}")
+                    st.error(f"AI Search failed ({type(exc).__name__}). Details: {detail[:500]}")
     result = st.session_state.get("ai_search_result")
     if result:
         st.markdown(f"**Your question:** {result['question']}")
@@ -548,7 +569,7 @@ elif page == "AI Search":
             for source in result["sources"]:
                 st.markdown(f"- [{source['title']}]({source['url']})")
         else:
-            st.caption("Gemini did not return source links for this response. Verify important details independently.")
+            st.caption("No separate source links were returned. Check citations in the answer and verify important details.")
 
 elif page == "WhatsApp":
     st.write("Join the campus WhatsApp spaces for announcements and community discussion. These open in WhatsApp; the links are managed by campus creators.")
@@ -568,7 +589,7 @@ elif page == "WhatsApp":
 
 elif page == "AI Study Buddy":
     st.caption("Ask for a concept explanation, study plan, or hints. Check important course details with your faculty.")
-    st.warning("Gemini free-tier prompts may be used to improve Google's products. Don't enter personal, sensitive, or confidential information.")
+    st.warning("This AI uses a free plan with usage limits. Don't enter personal, sensitive, or confidential information.")
     chat = st.session_state.setdefault("study_chat", [])
     for message in chat:
         with st.chat_message(message["role"]):
@@ -582,30 +603,29 @@ elif page == "AI Study Buddy":
             with st.spinner("Thinking through it…"):
                 answer = ""
                 try:
-                    key = secret("GEMINI_API_KEY")
+                    key = secret("GROQ_API_KEY")
                     if not key:
-                        answer = "The AI study buddy is not configured yet. Ask the campus creator to add the Gemini key in Streamlit Secrets."
+                        answer = "The free AI study buddy is not configured yet. Ask the app owner to add GROQ_API_KEY in Streamlit Secrets."
                     else:
-                        from google import genai
-                        from google.genai import types
-
-                        history = "\n".join(f"{m['role']}: {m['content']}" for m in chat[:-1][-8:])
-                        gemini = genai.Client(api_key=key)
-                        response = gemini.models.generate_content(
-                            model=secret("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-                            config=types.GenerateContentConfig(
-                                system_instruction=(
+                        messages = [
+                            {
+                                "role": "system",
+                                "content": (
                                     "You are CampusConnect's friendly B.Tech study buddy. Explain step by step, "
                                     "give assignment hints rather than dishonest submissions, and say when uncertain."
-                                )
-                            ),
-                            contents=f"Recent conversation:\n{history}\nuser: {question}",
+                                ),
+                            }
+                        ]
+                        messages.extend(
+                            {"role": item["role"], "content": item["content"]}
+                            for item in chat[:-1][-8:]
                         )
-                        answer = response.text or "I couldn't generate a text response. Please try again."
+                        messages.append({"role": "user", "content": question})
+                        answer, _ = groq_completion(messages)
                 except Exception as exc:
-                    key = str(secret("GEMINI_API_KEY", ""))
+                    key = str(secret("GROQ_API_KEY", ""))
                     detail = str(exc).replace(key, "[hidden API key]") if key else str(exc)
-                    answer = f"Gemini request failed ({type(exc).__name__}). Details: {detail[:500]}"
+                    answer = f"Free AI request failed ({type(exc).__name__}). Details: {detail[:500]}"
                 st.markdown(answer)
         chat.append({"role": "assistant", "content": answer})
 
