@@ -500,7 +500,7 @@ elif page == "Campus Calendar":
     st.write("Creator-published events appear below. Google Calendar can show the public campus calendar and special dates configured by your campus.")
     selected_day = st.date_input("Choose a day to see campus events", value=today, key="calendar_day")
     try:
-        all_posts = public_posts()
+        all_posts = client.table("campus_posts").select("*").eq("status", "published").order("event_date").execute().data or []
         selected_events = [p for p in all_posts if str(p["event_date"])[:10] == selected_day.isoformat()]
         if selected_events:
             for post in selected_events:
