@@ -92,19 +92,22 @@ def groq_generate_text(system_prompt, user_prompt):
     return result["choices"][0]["message"].get("content", "")
 
 
-def ai_draft(kind, title, event_day, audience, notes):
+def ai_draft(kind, title, event_day, audience, notes, language):
     return groq_generate_text(
         f"Draft a clear, concise campus {kind.lower()} for B.Tech students. Use only the provided facts. "
         "Do not invent time, venue, fees, links, contact details, or organizers; add [creator: add details] where missing. "
-        "Use a friendly and professional tone. Return only the draft.",
+        "Use a friendly and professional tone. Return only the draft. "
+        f"Write in {language}. For Manglish, write Malayalam using English/Latin letters, not Malayalam script. "
+        "Do not use LaTeX, dollar-sign math delimiters, or backslash commands; write any formulas in plain text.",
         f"Title: {title}\nDate: {event_day}\nAudience: {audience}\nCreator notes: {notes or 'None'}",
     )
 
 
-def ai_group_description(name, department, semester):
+def ai_group_description(name, department, semester, language):
     return groq_generate_text(
         "Write a friendly one or two sentence purpose for a student study/chat group. "
-        "Do not invent campus-specific facts, dates, links, or promises. Return only the description.",
+        "Do not invent campus-specific facts, dates, links, or promises. Return only the description. "
+        f"Write in {language}. For Manglish, write Malayalam using English/Latin letters, not Malayalam script.",
         f"Name: {name}\nDepartment: {department}\nSemester: {semester}",
     )
 
@@ -157,6 +160,12 @@ page = st.sidebar.radio(
     label_visibility="collapsed",
 )
 st.sidebar.caption(f"Signed in as {creator_name}")
+creator_ai_language = st.sidebar.selectbox(
+    "AI content language",
+    ["English", "Malayalam", "Manglish (Malayalam in English letters)"],
+    key="creator_ai_language",
+    help="Choose the language for AI drafted notices, activities, and group descriptions.",
+)
 st.sidebar.button("Sign out", on_click=creator_sign_out)
 
 heading, bulb = st.columns([12, 1])
@@ -193,7 +202,7 @@ elif page == "Manage notices & activities":
         notes = st.text_input("Confirmed facts for AI", key="new_notes", placeholder="Time, venue, registration, organizer/contact")
         if st.button("✨ Draft with free AI", disabled=not title.strip(), key="new_ai_draft"):
             try:
-                draft = ai_draft(kind, title.strip(), event_day.isoformat(), audience, notes.strip())
+                draft = ai_draft(kind, title.strip(), event_day.isoformat(), audience, notes.strip(), creator_ai_language)
                 if draft:
                     st.session_state.new_post_body = draft
                     st.rerun()
@@ -272,7 +281,7 @@ elif page == "Manage notices & activities":
             edit_notes = st.text_input("Extra confirmed facts for an AI rewrite", key=f"edit_notes_{selected_id}")
             if st.button("✨ Rewrite draft with free AI", key=f"edit_ai_{selected_id}"):
                 try:
-                    draft = ai_draft(edit_kind, edit_title, edit_date.isoformat(), edit_audience, edit_notes)
+                    draft = ai_draft(edit_kind, edit_title, edit_date.isoformat(), edit_audience, edit_notes, creator_ai_language)
                     if draft:
                         st.session_state[body_key] = draft
                         st.rerun()
@@ -321,7 +330,7 @@ elif page == "Group admin":
         semester = c2.selectbox("Semester", ["Any semester", *range(1, 9)], key="admin_group_semester")
         if st.button("✨ Suggest group purpose with free AI", disabled=not name.strip()):
             try:
-                suggestion = ai_group_description(name.strip(), department, semester)
+                suggestion = ai_group_description(name.strip(), department, semester, creator_ai_language)
                 if suggestion:
                     st.session_state.admin_group_description = suggestion
                     st.rerun()
