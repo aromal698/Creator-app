@@ -42,9 +42,9 @@ def apply_theme():
         [data-testid="stSidebar"] { background:#edf3ef; }
         div.stButton > button { border-radius:12px; border-color:#176b5b; color:#14584c; font-weight:600; }
         div.stButton > button:hover { background:#e5f2ec; border-color:#14584c; color:#103f36; }
-        .st-key-theme_bulb { position:fixed; z-index:9999; top:0; right:1.5rem; padding-top:20px; }
+        .st-key-theme_bulb { position:fixed; z-index:9999; top:0; right:1.2rem; width:48px; padding-top:18px; }
         .st-key-theme_bulb:before { content:''; position:absolute; top:0; left:50%; height:19px; border-left:2px solid #ae8d50; }
-        .st-key-theme_bulb button { border-radius:0 0 22px 22px; min-width:54px; min-height:46px; font-size:1.45rem; background:#fff7d9; border:1px solid #d6b66a; box-shadow:0 3px 12px #0002; }
+        .st-key-theme_bulb button { border-radius:50% 50% 45% 45%; width:48px; min-width:48px; height:48px; min-height:48px; padding:0; font-size:1.5rem; background:#fff7d9; border:2px solid #d6b66a; box-shadow:0 3px 12px #0003; }
         """ + dark_css + "</style>",
         unsafe_allow_html=True,
     )
@@ -52,6 +52,10 @@ def apply_theme():
 
 def back_to_dashboard():
     st.session_state.creator_page = "Creator dashboard"
+
+
+def open_calendar_content():
+    st.session_state.creator_page = "Manage notices & activities"
 
 
 def toggle_theme():
@@ -155,7 +159,7 @@ st.sidebar.markdown("# 🛠️ Creator Studio")
 st.sidebar.caption("Private tools for campus updates and group administration.")
 page = st.sidebar.radio(
     "Admin sections",
-    ["Creator dashboard", "Manage notices & activities", "Group admin"],
+    ["Creator dashboard", "Manage campus calendar", "Manage notices & activities", "Group admin"],
     key="creator_page",
     label_visibility="collapsed",
 )
@@ -186,11 +190,27 @@ if page == "Creator dashboard":
         m2.metric("Drafts awaiting review", sum(1 for p in posts if p["status"] == "draft"))
         m3.metric("Active groups", sum(1 for g in groups if g["is_active"]))
         st.info("Create or edit notices and activities in the next section. Only published items appear in the student app; drafts stay here.")
+        st.info("Published activities and special days also appear in the student Campus Calendar. AI can draft or rewrite wording; review it before publishing.")
         st.info("Manage starter groups, created groups, and group availability in Group admin.")
     except Exception:
         st.error("Could not load admin data. Run supabase_schema.sql and check the service key.")
 
+elif page == "Manage campus calendar":
+    st.caption("Creator-controlled campus activities and special days. Published items appear on the student home page and Campus Calendar.")
+    st.info("Use AI to draft an event below, then check its date and details before publishing. The optional embedded Google Calendar is separate and does not sync automatically.")
+    try:
+        events = db.table("campus_posts").select("id,title,event_date,status,is_special").eq("kind", "Activity").order("event_date").execute().data or []
+        if not events:
+            st.info("No campus calendar activities yet. Create the first one below.")
+        for event in events:
+            marker = " · ✨ Special day" if event.get("is_special") else ""
+            st.write(f"**{event['event_date']} · {event['title']}** — {event['status']}{marker}")
+        st.button("Create or edit calendar items", type="primary", on_click=open_calendar_content)
+    except Exception:
+        st.error("Could not load campus calendar entries. Check the Supabase connection.")
+
 elif page == "Manage notices & activities":
+    st.caption("Published activities and special days are shown in the student Campus Calendar. AI drafts and rewrites are suggestions; review details before publishing.")
     new_tab, edit_tab = st.tabs(["Create new update", "Edit existing updates"])
     with new_tab:
         st.caption("Free AI drafts the wording. Review all facts before saving or publishing.")
@@ -373,13 +393,24 @@ elif page == "Group admin":
             )
             group = groups_by_id[group_id]
             g_name = st.text_input("Group name", value=group["name"], key=f"group_name_{group_id}")
-            g_desc = st.text_area("Description", value=group.get("description") or "", key=f"group_desc_{group_id}")
             dept_options = DEPARTMENTS
             current_dept = group["department"] if group["department"] in dept_options else "Cross-department"
             g_dept = st.selectbox("Department", dept_options, index=dept_options.index(current_dept), key=f"group_dept_{group_id}")
             sem_options = ["Any semester", *range(1, 9)]
             current_sem = group.get("semester") if group.get("semester") else "Any semester"
             g_sem = st.selectbox("Semester", sem_options, index=sem_options.index(current_sem), key=f"group_sem_{group_id}")
+            g_desc_key = f"group_desc_{group_id}"
+            if st.button("✨ Rewrite group description with AI", key=f"ai_group_edit_{group_id}"):
+                try:
+                    suggestion = ai_group_description(g_name.strip(), g_dept, g_sem, creator_ai_language)
+                    if suggestion:
+                        st.session_state[g_desc_key] = suggestion
+                        st.rerun()
+                    else:
+                        st.warning("Add GROQ_API_KEY to Creator Studio Secrets to use AI.")
+                except Exception as exc:
+                    st.error(f"AI could not rewrite this description: {str(exc)[:400]}.")
+            g_desc = st.text_area("Description", value=group.get("description") or "", key=g_desc_key)
             g_active = st.checkbox("Group is active and visible to students", value=bool(group["is_active"]), key=f"group_active_{group_id}")
             if st.button("Save group changes", type="primary", key=f"save_group_{group_id}"):
                 try:
