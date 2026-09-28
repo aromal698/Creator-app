@@ -195,23 +195,25 @@ def render_ai_markdown(answer):
     for line in text.splitlines():
         stripped = line.strip()
         # Repair bare display equations such as: [ p + \frac{1}{2}\rho v^{2} = ... ]
+        has_bare_latex = bool(
+            re.search(r"\\(?:frac|rho|theta|pi|sqrt|sum|int|text|cdot|times|Delta|alpha|beta|dot|Rightarrow)", stripped)
+        )
+        equation_shaped = bool(re.fullmatch(r"[\w\\{}^_ +\-*/=().,]+", stripped))
         if (
             stripped
             and not stripped.startswith(("$", "- ", "* ", ">", "```"))
-            and "=" in stripped
-            and re.search(r"\\(?:frac|rho|theta|pi|sqrt|sum|int|text|cdot|times|Delta|alpha|beta)", stripped)
+            and has_bare_latex
+            and ("=" in stripped or equation_shaped)
         ):
             equation = stripped
             if equation.startswith("[") and equation.endswith("]"):
                 equation = equation[1:-1].strip()
-            line = f"$${equation}$$"
             line = f"$$\n{equation}\n$$"
         else:
             # Make standalone raw math commands in explanatory sentences readable too.
             line = line.replace(r"\rho", "ρ").replace(r"\theta", "θ").replace(r"\pi", "π")
             line = line.replace(r"\times", "×").replace(r"\cdot", "·")
         rendered_lines.append(line)
-    st.markdown("\n".join(rendered_lines))
     text = "\n".join(rendered_lines)
 
     # Render display equations with Streamlit's dedicated LaTeX renderer.
@@ -257,9 +259,10 @@ def groq_browser_search(question):
                 "content": (
                     "You are CampusConnect's research helper. Use the browser search tool, answer clearly, "
                     "cite sources in your response, note uncertainty, and never claim certainty beyond sources. "
-                    "For equations, use standard LaTeX wrapped in $...$ for inline math or $$...$$ for a display equation. "
+                    "For equations, use standard LaTeX wrapped in $...$ for inline math or put the equation alone between $$ delimiters. "
                     "Never show raw LaTeX commands such as \\frac or \\rho without math delimiters. "
-                    "After each important equation, explain in plain words what it means and define every symbol."
+                    "After each important equation, explain in plain words what it means and define every symbol. "
+                    "Use ordinary numbered citations like [1] only; never expose internal reference markers such as [1†L8-L11]."
                 ),
             },
             {"role": "user", "content": question},
@@ -591,6 +594,9 @@ elif page == "Campus Calendar":
 elif page == "AI Search":
     st.caption("Ask a question that needs current web information. Free-tier Groq AI searches the web and provides sources when available.")
     st.info("AI answers can still be wrong or out of date. Verify important academic, medical, legal, or safety information with an official source.")
+    response_language = st.selectbox(
+        "Answer language", ["English", "Malayalam", "Manglish (Malayalam in English letters)"], key="search_answer_language"
+    )
     st.warning("Don't enter personal, sensitive, or confidential information. Free-tier requests are subject to usage limits.")
     with st.form("ai_search_form"):
         search_question = st.text_input("What do you want to find?", placeholder="e.g. Explain recent advances in battery recycling")
@@ -603,7 +609,12 @@ elif page == "AI Search":
         else:
             with st.spinner("Searching the web and preparing an answer…"):
                 try:
-                    answer, sources = groq_browser_search(search_question.strip())
+                    language_instruction = {
+                        "English": "Answer in clear, simple English.",
+                        "Malayalam": "Answer in natural Malayalam using Malayalam script. Keep equations and standard technical terms readable, and explain each technical term in Malayalam.",
+                        "Manglish (Malayalam in English letters)": "Answer in Manglish: speak Malayalam, but write it using English/Latin letters. Do not switch to Malayalam script. Keep equations readable and explain technical terms simply.",
+                    }[response_language]
+                    answer, sources = groq_browser_search(f"{language_instruction}\n\nQuestion: {search_question.strip()}")
                     st.session_state.ai_search_result = {"question": search_question.strip(), "answer": answer, "sources": sources}
                 except Exception as exc:
                     key = str(secret("GROQ_API_KEY", ""))
@@ -639,6 +650,9 @@ elif page == "WhatsApp":
 elif page == "AI Study Buddy":
     st.caption("Ask for a concept explanation, study plan, or hints. Check important course details with your faculty.")
     st.warning("This AI uses a free plan with usage limits. Don't enter personal, sensitive, or confidential information.")
+    response_language = st.selectbox(
+        "Answer language", ["English", "Malayalam", "Manglish (Malayalam in English letters)"], key="study_answer_language"
+    )
     chat = st.session_state.setdefault("study_chat", [])
     for message in chat:
         with st.chat_message(message["role"]):
@@ -662,7 +676,8 @@ elif page == "AI Study Buddy":
                                 "content": (
                                     "You are CampusConnect's friendly B.Tech study buddy. Explain step by step, "
                                     "give assignment hints rather than dishonest submissions, and say when uncertain. "
-                                    "For equations, use standard LaTeX wrapped in $...$ for inline math or $$...$$ for a display equation. "
+                                    f"Reply in {response_language}. For Manglish, write Malayalam words using English/Latin letters, not Malayalam script. "
+                                    "For equations, use standard LaTeX wrapped in $...$ for inline math or put each display equation alone between $$ delimiters. "
                                     "Never show raw LaTeX commands such as \\frac or \\rho without math delimiters. "
                                     "Then explain the equation in simple words, define each symbol with its unit when applicable, "
                                     "and show a small worked example when useful."
