@@ -91,12 +91,15 @@ create table if not exists public.student_feedback (
     created_at timestamptz not null default now()
 );
 
--- Creator-managed public campus links. Values are links only, never API keys.
+-- Creator-managed public campus links and display name. Values are public, never API keys.
 create table if not exists public.campus_settings (
-    key text primary key check (key in ('whatsapp_community_url', 'whatsapp_channel_url', 'google_calendar_embed_url')),
+    key text primary key check (key in ('whatsapp_community_url', 'whatsapp_channel_url', 'google_calendar_embed_url', 'student_app_url', 'campus_creator_name')),
     value text not null default '',
     updated_at timestamptz not null default now()
 );
+alter table public.campus_settings drop constraint if exists campus_settings_key_check;
+alter table public.campus_settings add constraint campus_settings_key_check
+    check (key in ('whatsapp_community_url', 'whatsapp_channel_url', 'google_calendar_embed_url', 'student_app_url', 'campus_creator_name'));
 
 -- Public poster artwork is intended for campus notices and activities.
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
