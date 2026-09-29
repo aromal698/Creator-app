@@ -2,20 +2,24 @@
 
 from datetime import date, datetime, timedelta, timezone
 from html import escape
+from io import BytesIO
 import os
 import re
+import time
 from urllib.parse import urlencode
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
+from PIL import Image
 from supabase import create_client
 
 
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other"]
 SEMESTERS = list(range(1, 9))
-NAV_PAGES = ["Home", "Study Groups", "Group Chat", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "WhatsApp", "Feedback"]
+NAV_PAGES = ["Home", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "WhatsApp", "Feedback"]
 THEMES = [
     {"name": "White", "bg": "#f7faf8", "side": "#edf3ef", "surface": "#ffffff", "text": "#172b27", "muted": "#526861", "accent": "#176b5b", "soft": "#e3f1e8", "border": "#d2e3d8", "hero1": "#e3f1e8", "hero2": "#f2f6ee"},
     {"name": "Dark", "bg": "#101820", "side": "#17242d", "surface": "#1c2a34", "text": "#edf5f7", "muted": "#b3c4cb", "accent": "#59c3a5", "soft": "#203a3b", "border": "#35515a", "hero1": "#1b3a3b", "hero2": "#26384a"},
@@ -358,11 +362,57 @@ def render_group_chat_messages(database, group_id, user_id, display_name):
             bubble_class = "chat-own" if mine else "chat-other"
             who = "You" if mine else escape(str(item["display_name"]))
             when = escape(str(item["created_at"])[:16].replace("T", " "))
-            text = escape(str(item["message"]))
-            st.markdown(f"<div class='chat-bubble {bubble_class}'><div class='chat-meta'>{who} · {when}</div>{text}</div>", unsafe_allow_html=True)
+            text = escape(str(item.get("message") or ""))
+            if text:
+                st.markdown(f"<div class='chat-bubble {bubble_class}'><div class='chat-meta'>{who} · {when}</div>{text}</div>", unsafe_allow_html=True)
+            if item.get("image_path"):
+                try:
+                    photo_cache = st.session_state.setdefault("chat_photo_signed_urls", {})
+                    cached_photo = photo_cache.get(item["image_path"])
+                    if cached_photo and cached_photo[1] > time.time() + 60:
+                        signed_url = cached_photo[0]
+                    else:
+                        signed = database.storage.from_("group-chat-photos").create_signed_url(item["image_path"], 3600)
+                        signed_url = signed.get("signedURL") or signed.get("signedUrl")
+                        if signed_url:
+                            photo_cache[item["image_path"]] = (signed_url, time.time() + 3500)
+                    if signed_url:
+                        st.image(signed_url, caption=f"{who} · {when}", width=360)
+                except Exception:
+                    st.caption("A chat photo could not be displayed.")
     except Exception:
         st.error("Chat messages could not be loaded. Check the group membership policies.")
-    message = st.chat_input("Message your group…", max_chars=2000, key=f"chat_message_{group_id}")
+    with st.expander("📷 Add a photo, camera picture, or emoji"):
+        with st.form(f"chat_media_form_{group_id}"):
+            uploaded_photo = st.file_uploader("Choose a photo", type=["jpg", "jpeg", "png", "webp"], key=f"chat_upload_{group_id}")
+            camera_photo = st.camera_input("Take a photo", key=f"chat_camera_{group_id}")
+            caption_text = st.text_input("Caption (optional)", max_chars=500, key=f"chat_caption_{group_id}")
+            emoji = st.selectbox("Add an emoji", ["None", "😀", "😂", "❤️", "👍", "🎉", "🙏", "🔥", "🤔", "💡", "✅"], key=f"chat_emoji_{group_id}")
+            send_media = st.form_submit_button("Send to group", type="primary")
+        if send_media and (uploaded_photo or camera_photo or emoji != "None" or caption_text.strip()):
+            photo = camera_photo or uploaded_photo
+            image_path = None
+            try:
+                if photo:
+                    image = Image.open(BytesIO(photo.getvalue())).convert("RGB")
+                    image.thumbnail((1600, 1600))
+                    image_buffer = BytesIO()
+                    image.save(image_buffer, format="JPEG", quality=84, optimize=True)
+                    photo_bytes = image_buffer.getvalue()
+                    mime, extension = "image/jpeg", "jpg"
+                    image_path = f"{group_id}/{user_id}/{uuid4().hex}.{extension}"
+                    database.storage.from_("group-chat-photos").upload(
+                        image_path, photo_bytes, {"content-type": mime, "upsert": "false"}
+                    )
+                media_message = " ".join(part for part in [emoji if emoji != "None" else "", caption_text.strip()] if part)
+                database.table("group_messages").insert({
+                    "group_id": group_id, "sender_id": user_id, "display_name": display_name,
+                    "message": media_message, "image_path": image_path,
+                }).execute()
+                st.rerun()
+            except Exception:
+                st.error("Could not send this photo or emoji. Check that the latest database setup was run.")
+    message = st.chat_input("Message your group… 😊", max_chars=2000, key=f"chat_message_{group_id}")
     if message:
         try:
             database.table("group_messages").insert(
@@ -371,6 +421,47 @@ def render_group_chat_messages(database, group_id, user_id, display_name):
             st.rerun()
         except Exception:
             st.error("Message could not be sent. Confirm that you are a member of this group.")
+
+
+@st.fragment(run_every=8)
+def render_creator_chat(database, user_id, display_name):
+    try:
+        rows = database.table("student_creator_messages").select("*").eq("student_id", user_id).order("created_at").limit(100).execute().data or []
+        for item in rows:
+            mine = item["sender_role"] == "student"
+            who = "You" if mine else "Campus Creator"
+            when = escape(str(item["created_at"])[:16].replace("T", " "))
+            bubble_class = "chat-own" if mine else "chat-other"
+            st.markdown(
+                f"<div class='chat-bubble {bubble_class}'><div class='chat-meta'>{who} · {when}</div>{escape(str(item['message']))}</div>",
+                unsafe_allow_html=True,
+            )
+        if not rows:
+            st.caption("Start a private conversation with the campus creator.")
+    except Exception:
+        st.error("Your private chat could not be loaded. Ask the creator to run the updated database setup.")
+    message = st.chat_input("Message the campus creator…", max_chars=2000, key="creator_private_message")
+    if message and message.strip():
+        try:
+            database.table("student_creator_messages").insert({
+                "student_id": user_id, "student_name": display_name,
+                "sender_role": "student", "message": message.strip(),
+            }).execute()
+            st.rerun()
+        except Exception:
+            st.error("Your private message could not be sent. Please retry.")
+
+
+def show_snowfall():
+    flakes = "".join(
+        f"<i style='left:{(i * 37) % 100}%;animation-delay:-{(i % 9) * 0.8}s;animation-duration:{7 + (i % 6)}s;font-size:{10 + (i % 12)}px'>❄</i>"
+        for i in range(32)
+    )
+    st.markdown(
+        "<style>@keyframes campus-snow-fall{to{transform:translateY(110vh) rotate(360deg)}}.campus-snow{position:fixed;inset:0;z-index:99990;pointer-events:none;overflow:hidden}.campus-snow i{position:absolute;top:-5vh;color:#8acdf5;opacity:.8;font-style:normal;animation-name:campus-snow-fall;animation-timing-function:linear;animation-iteration-count:infinite}</style>"
+        f"<div class='campus-snow' aria-hidden='true'>{flakes}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def apply_theme():
@@ -429,6 +520,14 @@ def apply_theme():
         .chat-own { margin-left:auto; background:#d9fdd3; border-bottom-right-radius:4px; color:#15251b; }
         .chat-other { margin-right:auto; background:#fff; border-bottom-left-radius:4px; color:#15251b; }
         .chat-meta { font-size:.72rem; opacity:.7; margin-bottom:.25rem; }
+        .student-profile-top { display:flex; align-items:center; gap:.7rem; padding:.55rem .25rem .85rem; color:#183b32; }
+        .student-profile-top small { opacity:.7; }
+        .student-avatar-wrap { position:relative; display:inline-flex; }
+        .student-profile-avatar { display:grid; place-items:center; width:42px; height:42px; border-radius:50%; background:#176b5b; color:#fff; font-weight:800; border:2px solid #b7dcc7; box-shadow:0 2px 8px #183c2b22; }
+        .student-credit-badge { position:absolute; right:-13px; bottom:-5px; padding:1px 4px; border-radius:10px; background:#d8f5df; border:1px solid #71b989; color:#125c30; font-size:.58rem; font-weight:800; white-space:nowrap; }
+        .st-key-daily_alert_red button { background:#ffe3e3 !important; border:1px solid #e85b5b !important; color:#9e2020 !important; }
+        .st-key-daily_alert_yellow button { background:#fff5cc !important; border:1px solid #e5b832 !important; color:#785800 !important; }
+        .st-key-daily_alert_green button { background:#dcf7e5 !important; border:1px solid #47a66a !important; color:#155b32 !important; }
         [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] { gap:.42rem; }
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] { border:1px solid #d6e4da; border-radius:999px; padding:.48rem .8rem; background:#f8fbf8; box-shadow:0 2px 5px #183c2b0b; transition:all .16s ease; }
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover { background:#e6f3e9; border-color:#8ab59a; transform:translateY(-1px); }
@@ -556,8 +655,19 @@ st.session_state.setdefault("profile_semester", user_metadata.get("semester", SE
 st.session_state.setdefault("active_group_id", None)
 today = datetime.now(INDIA_TZ).date()
 today_iso = today.isoformat()
+uid = str(auth_user.id)
 
 with st.sidebar:
+    avatar_name = str(st.session_state.get("display_name", "Student")).strip() or "Student"
+    avatar_letter = escape(avatar_name[:1].upper())
+    try:
+        profile_green_total = client.table("student_daily_choices").select("id", count="exact").eq("user_id", uid).eq("choice", "green").execute().count or 0
+    except Exception:
+        profile_green_total = 0
+    st.markdown(
+        f"<div class='student-profile-top'><span class='student-avatar-wrap'><span class='student-profile-avatar'>{avatar_letter}</span><span class='student-credit-badge'>₹{profile_green_total * 5}</span></span><span><b>{escape(avatar_name)}</b><br><small>Student profile · reward credit</small></span></div>",
+        unsafe_allow_html=True,
+    )
     st.markdown("# 🎓 CampusConnect")
     st.caption("One campus. Every department.")
     display_name = st.text_input("Display name", key="display_name")
@@ -573,6 +683,42 @@ with st.sidebar:
     )
     st.caption(st.session_state.get("student_email") or "Email-only student session")
     st.button("Sign out", on_click=sign_out_callback)
+    st.divider()
+    st.markdown("**🎨 Today's alert**")
+    try:
+        selected_rows = client.table("student_daily_choices").select("choice").eq("user_id", uid).eq("choice_date", today_iso).limit(1).execute().data or []
+        daily_choice = selected_rows[0]["choice"] if selected_rows else None
+        green_total = profile_green_total
+    except Exception:
+        daily_choice, green_total = None, 0
+        st.caption("Today's alert options appear after the creator updates the database setup.")
+    if not daily_choice:
+        red_col, yellow_col, green_col = st.columns(3)
+        clicked_choice = None
+        if red_col.button("🔴", key="daily_alert_red", help="Choose red to open a private chat with the campus creator.", use_container_width=True):
+            clicked_choice = "red"
+        if yellow_col.button("🟡", key="daily_alert_yellow", help="Choose yellow to see snow fall today.", use_container_width=True):
+            clicked_choice = "yellow"
+        if green_col.button("🟢", key="daily_alert_green", help="Choose green to earn a ₹5 in-app reward credit.", use_container_width=True):
+            clicked_choice = "green"
+        if clicked_choice:
+            try:
+                client.table("student_daily_choices").insert({
+                    "user_id": uid, "choice_date": today_iso, "choice": clicked_choice,
+                }).execute()
+                if clicked_choice == "red":
+                    st.session_state.nav_page = "Chat with Creator"
+                st.rerun()
+            except Exception:
+                st.error("Your daily choice could not be saved. Please ask the creator to run the updated database setup.")
+        st.caption("Pick one option per day. Green adds in-app credit, not a cash payment.")
+    else:
+        choice_labels = {"red": "🔴 Private creator chat", "yellow": "🟡 Snowfall", "green": "🟢 ₹5 reward credit"}
+        st.success(f"Today's choice: {choice_labels.get(daily_choice, daily_choice)}")
+        st.caption(f"In-app reward balance: ₹{green_total * 5}")
+        if daily_choice == "red" and st.button("Open private creator chat", key="open_creator_chat"):
+            st.session_state.nav_page = "Chat with Creator"
+            st.rerun()
 
 # Store one anonymous view each time a signed-in student opens a different page.
 # No student ID, email, or message is sent to this aggregate analytics table.
@@ -593,8 +739,9 @@ with bulb:
 if page != "Home":
     st.button("← Back to home", on_click=go_home)
 
-uid = str(auth_user.id)
 name = display_name.strip() or "Student"
+if daily_choice == "yellow":
+    show_snowfall()
 
 if page == "Home":
     st.markdown(
@@ -787,6 +934,10 @@ elif page == "Group Chat":
         )
         st.caption("Only signed-in group members can read and send messages. This chat refreshes about every 8 seconds while open.")
         render_group_chat_messages(client, group_id, uid, name)
+
+elif page == "Chat with Creator":
+    st.caption("Private messages between you and the campus creator.")
+    render_creator_chat(client, uid, name)
 
 elif page in ("Campus Activities", "Notices"):
     kind = "Activity" if page == "Campus Activities" else "Notice"
