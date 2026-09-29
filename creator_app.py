@@ -711,7 +711,7 @@ elif page == "Manage notices & activities":
                     st.error("Could not delete this update.")
 
 elif page == "Campus links":
-    st.caption("Set the campus WhatsApp links and public calendar that students can open from their app.")
+    st.caption("Set the student app share link, campus WhatsApp links, and public calendar.")
     st.info("Only public invite or embed links belong here. Never enter API keys or passwords.")
     try:
         existing_settings = {
@@ -734,6 +734,13 @@ elif page == "Campus links":
         key="creator_whatsapp_channel",
         placeholder="https://whatsapp.com/channel/...",
     )
+    student_app_link = st.text_input(
+        "Public student app link",
+        value=existing_settings.get("student_app_url", str(secret("STUDENT_APP_URL", ""))),
+        key="creator_student_app_link",
+        placeholder="https://your-campusconnect-app.streamlit.app",
+        help="Paste the public URL students use to open CampusConnect. The student app uses it to create a WhatsApp share button.",
+    )
     calendar_embed_link = st.text_input(
         "Public Google Calendar embed URL",
         value=existing_settings.get("google_calendar_embed_url", str(secret("GOOGLE_CALENDAR_EMBED_URL", ""))),
@@ -744,10 +751,12 @@ elif page == "Campus links":
     if st.button("Save campus links", type="primary", key="save_campus_links"):
         community_link = community_link.strip()
         channel_link = channel_link.strip()
+        student_app_link = student_app_link.strip()
         calendar_embed_link = calendar_embed_link.strip()
         invalid_link = (
             (community_link and not community_link.startswith("https://"))
             or (channel_link and not channel_link.startswith("https://"))
+            or (student_app_link and not student_app_link.startswith("https://"))
             or (calendar_embed_link and not calendar_embed_link.startswith("https://calendar.google.com/calendar/embed"))
         )
         if invalid_link:
@@ -758,7 +767,9 @@ elif page == "Campus links":
                     [
                         {"key": "whatsapp_community_url", "value": community_link},
                         {"key": "whatsapp_channel_url", "value": channel_link},
+                        {"key": "student_app_url", "value": student_app_link},
                         {"key": "google_calendar_embed_url", "value": calendar_embed_link},
+                        {"key": "campus_creator_name", "value": creator_name.strip()},
                     ],
                     on_conflict="key",
                 ).execute()
