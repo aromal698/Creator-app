@@ -2,7 +2,7 @@
 
 A two-app Streamlit campus community for B.Tech students. Both apps use one Supabase database.
 
-- `app.py` — student app: email-only entry with no password or confirmation email, followed by a student profile form for name, department, and semester; seven bulb-cycled color themes; pebble-style navigation; groups/chats; notices, activities, calendar, AI study buddy/search, WhatsApp links, and feedback.
+- `app.py` — student app: create an account with email/password and student details, then sign in again with that same email/password; seven bulb-cycled color themes; pebble-style navigation; groups/chats; notices, activities, calendar, AI study buddy/search, WhatsApp links, and feedback.
 - `creator_app.py` — separate password-protected Creator Studio: seven bulb-cycled color themes, AI-assisted notice/activity/calendar drafts, poster reading and poster creation/upload, special-day highlighting, public campus links, publish/edit/delete, group administration, and anonymous page-view totals.
 - `supabase_schema.sql` — shared tables, initial department and semester groups, campus links, anonymous page-view counts, poster storage bucket, and student access policies.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
@@ -15,8 +15,8 @@ Student pages show published campus content. Creator drafts and edit controls re
 2. In the project, open **SQL Editor → New query**.
 3. Open `supabase_schema.sql`, copy its full contents, paste into the SQL Editor, and click **Run**. This creates groups for the listed departments and semesters 1–8, chats, campus posts, feedback, campus links, anonymous page-view counts, the public poster bucket, and database access policies.
    If the database already exists, run the updated SQL again. It adds missing columns/tables and refreshes policies without deleting existing posts or messages.
-4. In **Authentication → Sign In / Providers**, enable **Allow anonymous sign-ins**. The student app uses Supabase anonymous sessions; it does not send a confirmation email. The Email provider’s **Confirm email** toggle does not control this flow. [Supabase anonymous sign-ins](https://supabase.com/docs/guides/auth/auth-anonymous) · [Python anonymous sign-in](https://supabase.com/docs/reference/python/auth-signinanonymously).
-5. Students type an email, then enter their name, department, and semester. The email is only a label and is not verified. Anonymous accounts cannot be recovered after a sign-out, lost browser session, or switching devices; for a real campus launch where profiles/chat identity must persist, use verified email or another sign-in method.
+4. In **Authentication → Sign In / Providers → Email**, enable **Allow new users to sign up**. Turn **Confirm email** off if students should start using the app immediately after creating their profile. The app does not use anonymous sign-ins.
+5. No Magic Link template is needed for this password-based flow. Students select **Create profile** to enter name, email, department, semester, and password. The next time they choose **Log in** and use the same email and password. Supabase’s supported password sign-in is documented [here](https://supabase.com/docs/reference/python/auth-signinwithpassword).
 6. Find the project URL and publishable/anon key in the Supabase API key settings. Keep the service-role/secret key for the server-side Creator Studio only.
 
 ## 2. Create a public campus Google Calendar (optional)
@@ -36,7 +36,7 @@ Create your WhatsApp Community and Channel, then copy their invite/share URLs. A
 
 ## 4. Student login, page views, and notice posters
 
-- Students enter their email to start an anonymous session, then complete a profile with name, department, and semester. No password or confirmation email is used. Because the email is not an identity check, and the anonymous account is tied to the current browser session, sign-out/session loss means the student cannot recover the same account by re-entering the email.
+- New students create an email/password account and profile. Returning students sign in with that same email and password. With **Confirm email** off, Supabase does not require an email confirmation before the account can be used.
 - The creator dashboard counts app page openings in **App page views** and **Views today**. These are not unique-student counts: returning to the same page during one login session is counted once. The log stores only the page name and timestamp, not a student ID, email, or chat message.
 - In **Creator Studio → Manage notices & activities**, add event details, optionally upload a photo, then select **Create poster picture from these details**. You can also upload a finished poster and attach it directly. Review the preview, then save or publish. Students see the attached image with the notice/activity.
 - Poster image storage uses a public Supabase Storage bucket so student browsers can display images. Upload only artwork intended to be public. An uploaded background photo is sent to Supabase only when saving or publishing; poster reading sends the selected file to Groq only after you confirm in the app.
