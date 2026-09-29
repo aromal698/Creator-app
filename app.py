@@ -353,6 +353,9 @@ def campus_quote_of_the_day(day_key):
 
 @st.fragment(run_every=8)
 def render_group_chat_messages(database, group_id, user_id, display_name):
+    selection_epoch_key = f"chat_delete_selection_epoch_{group_id}"
+    selection_epoch = int(st.session_state.get(selection_epoch_key, 0))
+    selected_message_ids = []
     try:
         rows = database.table("group_messages").select("*").eq("group_id", group_id).order("created_at", desc=True).limit(100).execute().data or []
         if not rows:
@@ -364,7 +367,13 @@ def render_group_chat_messages(database, group_id, user_id, display_name):
             when = escape(str(item["created_at"])[:16].replace("T", " "))
             text = escape(str(item.get("message") or ""))
             if text:
-                st.markdown(f"<div class='chat-bubble {bubble_class}'><div class='chat-meta'>{who} · {when}</div>{text}</div>", unsafe_allow_html=True)
+                if mine:
+                    message_col, select_col = st.columns([8, 1])
+                    message_col.markdown(f"<div class='chat-bubble {bubble_class}'><div class='chat-meta'>{who} · {when}</div>{text}</div>", unsafe_allow_html=True)
+                    if select_col.checkbox("Select", key=f"chat_select_{group_id}_{selection_epoch}_{item['id']}", help="Select this message to delete it"):
+                        selected_message_ids.append(item["id"])
+                else:
+                    st.markdown(f"<div class='chat-bubble {bubble_class}'><div class='chat-meta'>{who} · {when}</div>{text}</div>", unsafe_allow_html=True)
             if item.get("image_path"):
                 try:
                     photo_cache = st.session_state.setdefault("chat_photo_signed_urls", {})
@@ -380,20 +389,26 @@ def render_group_chat_messages(database, group_id, user_id, display_name):
                         st.image(signed_url, caption=f"{who} · {when}", width=360)
                 except Exception:
                     st.caption("A chat photo could not be displayed.")
-            if mine and st.button("🗑️ Delete", key=f"delete_group_message_{item['id']}", help="Delete this message you sent"):
-                try:
-                    database.table("group_messages").delete().eq("id", item["id"]).eq("sender_id", user_id).execute()
-                    if item.get("image_path"):
-                        try:
-                            database.storage.from_("group-chat-photos").remove([item["image_path"]])
-                        except Exception:
-                            pass
-                        st.session_state.get("chat_photo_signed_urls", {}).pop(item["image_path"], None)
-                    st.rerun()
-                except Exception:
-                    st.error("Could not delete this message. Run the updated Supabase database setup and retry.")
+            if mine and not text:
+                if st.checkbox("Select message to delete", key=f"chat_select_{group_id}_{selection_epoch}_{item['id']}"):
+                    selected_message_ids.append(item["id"])
     except Exception:
         st.error("Chat messages could not be loaded. Check the group membership policies.")
+    if selected_message_ids and st.button(f"🗑️ Delete selected ({len(selected_message_ids)})", key=f"delete_selected_messages_{group_id}_{selection_epoch}"):
+        try:
+            selected_rows = [item for item in rows if item.get("id") in selected_message_ids and item.get("sender_id") == user_id]
+            for item in selected_rows:
+                database.table("group_messages").delete().eq("id", item["id"]).eq("sender_id", user_id).execute()
+                if item.get("image_path"):
+                    try:
+                        database.storage.from_("group-chat-photos").remove([item["image_path"]])
+                    except Exception:
+                        pass
+                    st.session_state.get("chat_photo_signed_urls", {}).pop(item["image_path"], None)
+            st.session_state[selection_epoch_key] = selection_epoch + 1
+            st.rerun()
+        except Exception:
+            st.error("Could not delete the selected message. Run the updated Supabase database setup and retry.")
     epoch_key = f"chat_composer_epoch_{group_id}"
     epoch = int(st.session_state.get(epoch_key, 0))
     mode_key = f"chat_composer_mode_{group_id}"
