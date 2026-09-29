@@ -38,47 +38,9 @@ create table if not exists public.private_group_invites (
 alter table public.private_group_invites enable row level security;
 revoke all on public.private_group_invites from anon, authenticated;
 
-create or replace function public.create_private_campus_group(
-    p_name text,
-    p_department text,
-    p_semester smallint,
-    p_description text,
-    p_display_name text,
-    p_code_hash text
-)
-returns uuid
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-    new_group_id uuid;
-begin
-    if auth.uid() is null then
-        raise exception 'Sign in to create a private group';
-    end if;
-    if nullif(trim(p_name), '') is null or nullif(trim(p_display_name), '') is null then
-        raise exception 'Group name and student name are required';
-    end if;
-    if p_code_hash !~ '^[0-9a-f]{64}$' then
-        raise exception 'Invalid private group code';
-    end if;
-
-    insert into public.campus_groups (
-        name, department, semester, description, created_by, created_by_name, is_private
-    ) values (
-        trim(p_name), trim(p_department), p_semester, coalesce(p_description, ''), auth.uid(), trim(p_display_name), true
-    ) returning id into new_group_id;
-
-    insert into public.group_members (group_id, user_id, display_name)
-    values (new_group_id, auth.uid(), trim(p_display_name));
-
-    insert into public.private_group_invites (group_id, code_hash)
-    values (new_group_id, lower(p_code_hash));
-
-    return new_group_id;
-end;
-$$;
+-- Private groups are created only by Creator Studio using its server-only service key.
+-- Remove the earlier student-callable creator function if this schema is being reapplied.
+drop function if exists public.create_private_campus_group(text, text, smallint, text, text, text);
 
 create or replace function public.join_private_campus_group(p_code_hash text, p_display_name text)
 returns uuid
@@ -113,9 +75,7 @@ begin
 end;
 $$;
 
-revoke all on function public.create_private_campus_group(text, text, smallint, text, text, text) from public;
 revoke all on function public.join_private_campus_group(text, text) from public;
-grant execute on function public.create_private_campus_group(text, text, smallint, text, text, text) to authenticated;
 grant execute on function public.join_private_campus_group(text, text) to authenticated;
 
 create table if not exists public.group_messages (
