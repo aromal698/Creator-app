@@ -41,7 +41,10 @@ def secret(name, default=None):
 
 
 def clear_login():
-    for key in ("supabase_access_token", "supabase_refresh_token", "campus_user_id", "display_name"):
+    for key in (
+        "supabase_access_token", "supabase_refresh_token", "campus_user_id", "display_name",
+        "student_email", "student_profile_complete", "profile_department", "profile_semester",
+    ):
         st.session_state.pop(key, None)
 
 
@@ -96,17 +99,15 @@ def auth_setup_help(error):
         )
     if any(term in message for term in ("connecterror", "connecttimeout", "readtimeout", "timed out", "network", "name or service not known")):
         return "CampusConnect could not connect to Supabase. Check your internet, project URL, and Supabase project status, then retry."
-    if any(term in message for term in ("signups not allowed", "signup is disabled", "sign up is disabled", "user signups are disabled")):
-        return "New student accounts are disabled in Supabase. The app owner must enable email sign-ups under Authentication → Sign In / Providers → Email."
-    if any(term in message for term in ("rate limit", "email rate limit")):
-        return "Supabase temporarily limited account requests. Wait before retrying. Turning off Confirm email prevents signup confirmation emails for new accounts."
+    if any(term in message for term in ("anonymous sign-ins are disabled", "anonymous sign-in is disabled", "anonymous users are disabled", "anonymous provider is disabled", "anonymous sign-in is not enabled")):
+        return "Email-only entry needs one Supabase setting: Authentication → Sign In / Providers → Allow anonymous sign-ins. Turn it on. This does not send email or require email confirmation."
     return (
         "Supabase returned an unexpected authentication error. Check this app's SUPABASE_URL and public/anon key, "
         "then open Supabase → Authentication logs to see the matching error. Never paste a service-role key into the student app."
     )
 
 
-def student_access_callback(name, email, password):
+def student_access_callback(email):
     url = secret("SUPABASE_URL")
     public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
     if not url or not public_key:
@@ -114,64 +115,18 @@ def student_access_callback(name, email, password):
         return
     try:
         client = create_client(url, public_key)
-    except Exception as client_error:
-        st.session_state.auth_notice = auth_setup_help(client_error)
-        return
-    try:
-        response = client.auth.sign_in_with_password({"email": email.strip(), "password": password})
-        if save_auth_response(response, name.strip()):
-            st.session_state.nav_page = "Home"
-            st.session_state.auth_notice = "Welcome back to CampusConnect."
-            return
-        raise RuntimeError("Supabase did not return a student session.")
-    except Exception as sign_in_error:
-        sign_in_message = str(sign_in_error).lower()
-        if "email not confirmed" in sign_in_message:
-            st.session_state.auth_notice = (
-                "This account was created before email confirmation was turned off and is still unconfirmed. "
-                "The app owner must confirm this existing account once in Supabase → Authentication → Users. "
-                "New accounts can then enter immediately."
-            )
-            return
-        credential_error = any(
-            marker in sign_in_message
-            for marker in ("invalid login credentials", "invalid_credentials", "user not found")
+        response = client.auth.sign_in_anonymously(
+            {"options": {"data": {"college_email": email.strip()}}}
         )
-        if not credential_error:
-            st.session_state.auth_notice = auth_setup_help(sign_in_error)
-            return
-        if not name.strip():
-            st.session_state.auth_notice = (
-                "If this is your first visit, enter your name too so CampusConnect can create your account. "
-                "If you already have an account, check that you entered the same email and password you used before."
-            )
-            return
-
-    try:
-        response = client.auth.sign_up({
-            "email": email.strip(),
-            "password": password,
-            "options": {"data": {"display_name": name.strip()}},
-        })
-        if save_auth_response(response, name.strip()):
+        if save_auth_response(response):
+            st.session_state.student_email = email.strip()
+            st.session_state.student_profile_complete = False
             st.session_state.nav_page = "Home"
-            st.session_state.auth_notice = "Your student account is ready. Welcome to CampusConnect."
-        else:
-            st.session_state.auth_notice = (
-                "Your account request was received, but Supabase is waiting for email confirmation. "
-                "For immediate entry, the app owner needs to turn off Confirm email in Supabase Auth settings."
-            )
-    except Exception as signup_error:
-        message = str(signup_error).lower()
-        if "password" in message or "weak_password" in message:
-            st.session_state.auth_notice = "Choose a password that meets the password rules set in Supabase Auth, then try again."
-        elif "already registered" in message or "already been registered" in message:
-            st.session_state.auth_notice = (
-                "This email already has an account. Enter the same password you used when that account was created. "
-                "If your old account used email-code sign-in, ask the app owner to help set up a password for it."
-            )
-        else:
-            st.session_state.auth_notice = auth_setup_help(signup_error)
+            st.session_state.auth_notice = "Email received. Now add your name, department, and semester to continue."
+            return
+        st.session_state.auth_notice = "Supabase did not start a student session. Please retry."
+    except Exception as auth_error:
+        st.session_state.auth_notice = auth_setup_help(auth_error)
 
 
 def sign_out_callback():
@@ -454,26 +409,25 @@ def show_login():
     bulb_space, bulb_column = st.columns([12, 1])
     with bulb_column:
         theme_control()
-    st.markdown("<div class='eyebrow'>STUDENT SIGN IN</div>", unsafe_allow_html=True)
+    st.markdown("<div class='eyebrow'>STUDENT ENTRY</div>", unsafe_allow_html=True)
     st.title("Welcome to CampusConnect")
-    st.write("First visit: enter your name, email, and password to create your account. Returning student: enter the same email and password; leave the name blank.")
+    st.write("Enter your email to open CampusConnect. Next, add your name, department, and semester.")
     auth_notice = st.session_state.pop("auth_notice", None)
     if auth_notice and "sign-in failed" not in auth_notice.lower():
         st.info(auth_notice)
     if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
         st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
         return
-    st.caption("Your name is needed only the first time. Use your same email and password whenever you return. Supabase still enforces its password-length rule.")
+    st.caption("No password or confirmation email is used. The email is only a label and is not verified.")
+    st.info("This simple profile is temporary. If you sign out, lose this browser session, or switch devices, you cannot recover the same student account using email alone.")
     with st.form("student_access_form"):
-        name = st.text_input("Your name (first visit only)", key="student_access_name")
         email = st.text_input("Email address", key="student_access_email")
-        password = st.text_input("Choose a password and remember it", type="password", key="student_access_password")
-        submitted = st.form_submit_button("Continue to CampusConnect", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("Continue with email", type="primary", use_container_width=True)
     if submitted:
-        if "@" not in email or "." not in email.rsplit("@", 1)[-1] or not password:
-            st.warning("Enter a valid email address and your password. Add your name the first time you create an account.")
+        if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+            st.warning("Enter a valid email address.")
         else:
-            student_access_callback(name, email, password)
+            student_access_callback(email)
             st.rerun()
 
 apply_theme()
@@ -499,7 +453,41 @@ def campus_setting(key, legacy_secret):
         return str(campus_settings[key] or "").strip()
     return str(secret(legacy_secret, "")).strip()
 
-st.session_state.setdefault("display_name", (getattr(auth_user, "user_metadata", {}) or {}).get("display_name", "Student"))
+user_metadata = getattr(auth_user, "user_metadata", {}) or {}
+st.session_state.setdefault("student_email", user_metadata.get("college_email", ""))
+profile_ready = bool(user_metadata.get("display_name") and user_metadata.get("department") and user_metadata.get("semester"))
+if not profile_ready:
+    st.markdown("<div class='eyebrow'>ONE-TIME STUDENT PROFILE</div>", unsafe_allow_html=True)
+    st.title("Tell us about yourself")
+    st.caption(f"Email entered: {st.session_state.get('student_email', '')} · This address has not been verified.")
+    st.info("After saving your name, department, and semester, you can join study groups and chats.")
+    with st.form("student_profile_setup"):
+        profile_name = st.text_input("Your name", key="setup_display_name")
+        profile_department = st.selectbox("Department", DEPARTMENTS, key="setup_department")
+        profile_semester = st.selectbox("Semester", SEMESTERS, key="setup_semester")
+        profile_submitted = st.form_submit_button("Save profile and enter", type="primary", use_container_width=True)
+    if profile_submitted:
+        if not profile_name.strip():
+            st.warning("Enter your name to continue.")
+        else:
+            try:
+                client.auth.update_user({
+                    "data": {
+                        "display_name": profile_name.strip(),
+                        "college_email": st.session_state.get("student_email", ""),
+                        "department": profile_department,
+                        "semester": profile_semester,
+                    }
+                })
+                st.session_state.display_name = profile_name.strip()
+                st.session_state.profile_department = profile_department
+                st.session_state.profile_semester = profile_semester
+                st.rerun()
+            except Exception:
+                st.error("Could not save your profile. Please try again.")
+    st.stop()
+
+st.session_state.setdefault("display_name", user_metadata.get("display_name", "Student"))
 st.session_state.setdefault("active_group_id", None)
 today = datetime.now(INDIA_TZ).date()
 today_iso = today.isoformat()
@@ -518,7 +506,7 @@ with st.sidebar:
         key="nav_page",
         label_visibility="collapsed",
     )
-    st.caption(auth_user.email or "Signed-in student")
+    st.caption(st.session_state.get("student_email") or "Email-only student session")
     st.button("Sign out", on_click=sign_out_callback)
 
 # Store one anonymous view each time a signed-in student opens a different page.
