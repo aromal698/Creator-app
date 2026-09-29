@@ -656,6 +656,9 @@ st.session_state.setdefault("active_group_id", None)
 today = datetime.now(INDIA_TZ).date()
 today_iso = today.isoformat()
 uid = str(auth_user.id)
+pending_nav_page = st.session_state.pop("_pending_nav_page", None)
+if pending_nav_page:
+    st.session_state.nav_page = pending_nav_page
 
 with st.sidebar:
     avatar_name = str(st.session_state.get("display_name", "Student")).strip() or "Student"
@@ -707,7 +710,7 @@ with st.sidebar:
                     "user_id": uid, "choice_date": today_iso, "choice": clicked_choice,
                 }).execute()
                 if clicked_choice == "red":
-                    st.session_state.nav_page = "Chat with Creator"
+                    st.session_state._pending_nav_page = "Chat with Creator"
                 st.rerun()
             except Exception:
                 st.error("Your daily choice could not be saved. Please ask the creator to run the updated database setup.")
@@ -717,7 +720,7 @@ with st.sidebar:
         st.success(f"Today's choice: {choice_labels.get(daily_choice, daily_choice)}")
         st.caption(f"In-app reward balance: ₹{green_total * 5}")
         if daily_choice == "red" and st.button("Open private creator chat", key="open_creator_chat"):
-            st.session_state.nav_page = "Chat with Creator"
+            st.session_state._pending_nav_page = "Chat with Creator"
             st.rerun()
 
 # Store one anonymous view each time a signed-in student opens a different page.
@@ -903,7 +906,7 @@ elif page == "Study Groups":
                     group_id = result[0]["id"]
                     client.table("group_members").insert({"group_id": group_id, "user_id": uid, "display_name": name}).execute()
                     st.session_state.active_group_id = group_id
-                    st.session_state.nav_page = "Group Chat"
+                    st.session_state._pending_nav_page = "Group Chat"
                     st.rerun()
                 except Exception:
                     st.error("The group could not be created. Check the Supabase group policies and try again.")
