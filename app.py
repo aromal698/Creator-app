@@ -92,6 +92,14 @@ def get_authenticated_client():
 def auth_setup_help(error):
     """Turn common Supabase auth failures into safe, actionable hints; never echo secrets."""
     message = str(error).lower()
+    if any(term in message for term in ("invalid login credentials", "invalid credentials", "email or password is incorrect")):
+        return "Email or password is incorrect. If this is your first visit, choose Create profile first. Otherwise, check that you are using the same email and password you registered with."
+    if any(term in message for term in ("email not confirmed", "email_not_confirmed", "email is not confirmed")):
+        return "This account is waiting for email confirmation. Turn off Authentication → Sign In / Providers → Email → Confirm email for new accounts. This already-created account may still need its existing confirmation email or help from the project owner before it can log in."
+    if any(term in message for term in ("user already registered", "already been registered", "already registered")):
+        return "An account already exists for this email. Choose Log in and use its existing password. If you never set a password, reset that account in Supabase Auth or use another email."
+    if any(term in message for term in ("password should be at least", "password is too short", "weak_password")):
+        return "Choose a longer password and try creating the profile again. CampusConnect asks for at least 8 characters."
     if any(term in message for term in ("invalid api key", "invalid api_key", "invalid jwt", "unauthorized", "401")):
         return (
             "Supabase rejected the student app key. In this Streamlit app's Secrets, check SUPABASE_URL "
