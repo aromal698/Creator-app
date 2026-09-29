@@ -20,6 +20,11 @@ from supabase import create_client
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other"]
 SEMESTERS = list(range(1, 9))
 NAV_PAGES = ["Home", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "WhatsApp", "Feedback"]
+NAV_PAGE_ICONS = {
+    "Home": "⌂", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
+    "Campus Calendar": "📅", "Campus Activities": "🎪", "Notices": "📌",
+    "AI Study Buddy": "✨", "AI Search": "🔎", "WhatsApp": "📲", "Feedback": "💡",
+}
 THEMES = [
     {"name": "White", "bg": "#f7faf8", "side": "#edf3ef", "surface": "#ffffff", "text": "#172b27", "muted": "#526861", "accent": "#176b5b", "soft": "#e3f1e8", "border": "#d2e3d8", "hero1": "#e3f1e8", "hero2": "#f2f6ee"},
     {"name": "Dark", "bg": "#101820", "side": "#17242d", "surface": "#1c2a34", "text": "#edf5f7", "muted": "#b3c4cb", "accent": "#59c3a5", "soft": "#203a3b", "border": "#35515a", "hero1": "#1b3a3b", "hero2": "#26384a"},
@@ -540,7 +545,8 @@ def apply_theme():
     scheme = "dark" if theme["name"] == "Dark" else "light"
     theme_css = f"""
     .stApp {{ color-scheme:{scheme}; --primary-color:{theme['accent']}; --background-color:{theme['bg']}; --secondary-background-color:{theme['side']}; --text-color:{theme['text']}; background:{theme['bg']} !important; color:{theme['text']} !important; }}
-    .stApp [data-testid="stSidebar"] {{ background:{theme['side']} !important; }}
+    .stApp [data-testid="stSidebar"] {{ background:{theme['side']} !important; border-right:1px solid {theme['border']} !important; }}
+    .stApp [data-testid="stSidebar"] .student-profile-top {{ background:{theme['surface']} !important; border:1px solid {theme['border']} !important; color:{theme['text']} !important; border-radius:18px; padding:.7rem !important; margin:.2rem 0 .7rem; box-shadow:0 5px 16px #163b2b0b; }}
     .stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp p,.stApp label,.stApp legend,.stApp [data-testid="stMarkdownContainer"],.stApp [data-testid="stWidgetLabel"],.stApp [data-testid="stWidgetLabel"] p {{ color:{theme['text']} !important; }}
     .stApp [data-testid="stCaptionContainer"],.stApp [data-testid="stCaptionContainer"] p {{ color:{theme['muted']} !important; }}
     .stApp .eyebrow,.stApp .quote-label {{ color:{theme['accent']} !important; }}
@@ -561,8 +567,9 @@ def apply_theme():
     .stApp div.stButton > button,.stApp [data-testid="stFormSubmitButton"] button,.stApp [data-testid="stDownloadButton"] button,.stApp [data-testid="stLinkButton"] a {{ border-color:{theme['accent']} !important; color:{theme['accent']} !important; }}
     .stApp div.stButton > button:hover,.stApp [data-testid="stFormSubmitButton"] button:hover,.stApp [data-testid="stDownloadButton"] button:hover {{ background:{theme['soft']} !important; }}
     .stApp .st-key-theme_bulb button {{ background:#fff7d9 !important; color:#704f00 !important; border-color:#d6b66a !important; }}
-    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] {{ background:{theme['surface']} !important; border-color:{theme['border']} !important; color:{theme['text']} !important; }}
-    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; }}
+    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] {{ background:{theme['surface']} !important; border:1px solid {theme['border']} !important; border-left:4px solid transparent !important; color:{theme['text']} !important; }}
+    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; }}
+    .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; border-left:4px solid {theme['accent']} !important; }}
     """
     st.markdown(
         """<style>
@@ -599,10 +606,10 @@ def apply_theme():
         .st-key-daily_alert_red button { background:#ffe3e3 !important; border:1px solid #e85b5b !important; color:#9e2020 !important; }
         .st-key-daily_alert_yellow button { background:#fff5cc !important; border:1px solid #e5b832 !important; color:#785800 !important; }
         .st-key-daily_alert_green button { background:#dcf7e5 !important; border:1px solid #47a66a !important; color:#155b32 !important; }
-        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] { gap:.42rem; }
-        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] { border:1px solid #d6e4da; border-radius:999px; padding:.48rem .8rem; background:#f8fbf8; box-shadow:0 2px 5px #183c2b0b; transition:all .16s ease; }
-        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover { background:#e6f3e9; border-color:#8ab59a; transform:translateY(-1px); }
-        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) { background:#d9eee0; border-color:#4b9870; box-shadow:0 3px 8px #1c59331c; }
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] { gap:.4rem; }
+        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] { width:100%; box-sizing:border-box; border-radius:14px; padding:.62rem .78rem; margin:1px 0; box-shadow:0 2px 7px #183c2b0b; transition:all .16s ease; font-weight:600; }
+        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover { transform:translateX(2px); }
+        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) { box-shadow:0 4px 12px #183c2b13; }
         .st-key-theme_bulb { position:fixed; z-index:99999; top:3.35rem; right:1.2rem; width:48px; padding-top:18px; }
         .st-key-theme_bulb:before { content:''; position:absolute; top:0; left:50%; height:19px; border-left:2px solid #ae8d50; }
         .st-key-theme_bulb button { border-radius:50% 50% 45% 45%; width:48px; min-width:48px; height:48px; min-height:48px; padding:0; font-size:1.5rem; background:#fff7d9; border:2px solid #d6b66a; box-shadow:0 3px 12px #0003; }
@@ -763,6 +770,7 @@ with st.sidebar:
     page = st.radio(
         "Navigate",
         NAV_PAGES,
+        format_func=lambda value: f"{NAV_PAGE_ICONS.get(value, '•')}   {value}",
         key="nav_page",
         label_visibility="collapsed",
     )
