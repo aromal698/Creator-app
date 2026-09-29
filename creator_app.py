@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import os
 import re
+from urllib.parse import quote
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -364,7 +365,17 @@ except Exception:
     st.error("Could not connect to Supabase. Check the Creator Studio secrets.")
     st.stop()
 
-creator_name = str(secret("CAMPUS_CREATOR_NAME", "Campus Creator"))
+try:
+    creator_public_settings = {
+        row["key"]: row["value"]
+        for row in (db.table("campus_settings").select("key,value").execute().data or [])
+    }
+except Exception:
+    creator_public_settings = {}
+creator_name = str(
+    creator_public_settings.get("campus_creator_name")
+    or secret("CAMPUS_CREATOR_NAME", "Campus Creator")
+).strip() or "Campus Creator"
 today = datetime.now(INDIA_TZ).date()
 pending_poster_title = st.session_state.pop("_pending_poster_title", None)
 if pending_poster_title:
@@ -741,6 +752,17 @@ elif page == "Campus links":
         placeholder="https://your-campusconnect-app.streamlit.app",
         help="Paste the public URL students use to open CampusConnect. The student app uses it to create a WhatsApp share button.",
     )
+    if student_app_link.strip().startswith("https://"):
+        share_text = quote(f"Open CampusConnect: {student_app_link.strip()}", safe="")
+        st.link_button("📲 Share the app link on WhatsApp", f"https://wa.me/?text={share_text}")
+        st.caption("For a WhatsApp Business profile, add this URL in the profile's Website field. WhatsApp Business profiles can display a business website.")
+    creator_display_name = st.text_input(
+        "Creator name / Feedback signature",
+        value=existing_settings.get("campus_creator_name", creator_name),
+        key="creator_display_name_setting",
+        placeholder="e.g. Aromal KV · Campus Creator",
+        help="This name appears in Creator Studio and at the bottom of the student Feedback page.",
+    )
     calendar_embed_link = st.text_input(
         "Public Google Calendar embed URL",
         value=existing_settings.get("google_calendar_embed_url", str(secret("GOOGLE_CALENDAR_EMBED_URL", ""))),
@@ -752,12 +774,14 @@ elif page == "Campus links":
         community_link = community_link.strip()
         channel_link = channel_link.strip()
         student_app_link = student_app_link.strip()
+        creator_display_name = creator_display_name.strip()
         calendar_embed_link = calendar_embed_link.strip()
         invalid_link = (
             (community_link and not community_link.startswith("https://"))
             or (channel_link and not channel_link.startswith("https://"))
             or (student_app_link and not student_app_link.startswith("https://"))
             or (calendar_embed_link and not calendar_embed_link.startswith("https://calendar.google.com/calendar/embed"))
+            or not creator_display_name
         )
         if invalid_link:
             st.error("Use secure https:// links. The calendar link must be a Google Calendar embed URL.")
@@ -769,7 +793,7 @@ elif page == "Campus links":
                         {"key": "whatsapp_channel_url", "value": channel_link},
                         {"key": "student_app_url", "value": student_app_link},
                         {"key": "google_calendar_embed_url", "value": calendar_embed_link},
-                        {"key": "campus_creator_name", "value": creator_name.strip()},
+                        {"key": "campus_creator_name", "value": creator_display_name},
                     ],
                     on_conflict="key",
                 ).execute()
