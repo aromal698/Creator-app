@@ -44,7 +44,6 @@ def clear_login():
     for key in (
         "supabase_access_token", "supabase_refresh_token", "campus_user_id", "display_name",
         "student_email", "student_profile_complete", "profile_department", "profile_semester",
-        "pending_otp_email",
     ):
         st.session_state.pop(key, None)
 
@@ -135,12 +134,12 @@ def student_signup_callback(name, email, password, department, semester):
             st.session_state.nav_page = "Home"
             st.session_state.auth_notice = "Your student profile is ready."
             return
-        st.session_state.auth_notice = "Account created. Check your inbox to confirm your email, then use Log in with email code. To enter without a signup confirmation, turn off Confirm email in Supabase Email provider settings."
+        st.session_state.auth_notice = "Your account was created. Check your inbox for Supabase's email confirmation, then log in. To skip signup confirmation for new accounts, turn off Confirm email in Supabase Email provider settings before students create their profiles."
     except Exception as auth_error:
         st.session_state.auth_notice = auth_setup_help(auth_error)
 
 
-def request_student_email_code(email):
+def student_login_callback(email, password):
     url = secret("SUPABASE_URL")
     public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
     if not url or not public_key:
@@ -148,31 +147,15 @@ def request_student_email_code(email):
         return
     try:
         client = create_client(url, public_key)
-        client.auth.sign_in_with_otp({
-            "email": email.strip(),
-            "options": {"should_create_user": False},
-        })
-        st.session_state.pending_otp_email = email.strip()
-        st.session_state.auth_notice = "A one-time sign-in code was sent to your email. Enter it below."
-    except Exception as auth_error:
-        st.session_state.auth_notice = auth_setup_help(auth_error)
-
-
-def verify_student_email_code(email, token):
-    url = secret("SUPABASE_URL")
-    public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
-    try:
-        client = create_client(url, public_key)
-        response = client.auth.verify_otp({"email": email.strip(), "token": token.strip(), "type": "email"})
+        response = client.auth.sign_in_with_password({"email": email.strip(), "password": password})
         if save_auth_response(response):
             st.session_state.student_email = email.strip()
             st.session_state.nav_page = "Home"
-            st.session_state.pop("pending_otp_email", None)
             st.session_state.auth_notice = "You are signed in."
             return
-        st.session_state.auth_notice = "Supabase did not finish sign-in. Request another code and try again."
-    except Exception:
-        st.session_state.auth_notice = "That code could not be verified. Check the latest code in your inbox and try again."
+        st.session_state.auth_notice = "Supabase did not finish sign-in. Check your details and try again."
+    except Exception as auth_error:
+        st.session_state.auth_notice = auth_setup_help(auth_error)
 
 
 def sign_out_callback():
@@ -457,14 +440,14 @@ def show_login():
         theme_control()
     st.markdown("<div class='eyebrow'>STUDENT ENTRY</div>", unsafe_allow_html=True)
     st.title("Welcome to CampusConnect")
-    st.write("Create a student profile with a password, or sign in to an existing profile using an email code.")
+    st.write("Create a student profile with your email and password. Use the same email and password whenever you return.")
     auth_notice = st.session_state.pop("auth_notice", None)
     if auth_notice and "sign-in failed" not in auth_notice.lower():
         st.info(auth_notice)
     if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
         st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
         return
-    auth_choice = st.radio("Choose an option", ["Create profile", "Log in with email"], horizontal=True, key="student_auth_choice")
+    auth_choice = st.radio("Choose an option", ["Create profile", "Log in"], horizontal=True, key="student_auth_choice")
     if auth_choice == "Create profile":
         st.caption("Create your account with email and password, then enter your student details.")
         with st.form("student_create_account"):
@@ -486,32 +469,21 @@ def show_login():
                 student_signup_callback(new_name, new_email, new_password, new_department, new_semester)
                 st.rerun()
     else:
-        st.caption("Enter your account email. Supabase will email a one-time code to prove it is yours.")
-        pending_email = st.session_state.get("pending_otp_email", "")
-        with st.form("student_email_login"):
-            email = st.text_input("Email address", value=pending_email, key="student_login_email")
-            if pending_email:
-                code = st.text_input("One-time code from your email", key="student_login_code", max_chars=8)
-                login_submitted = st.form_submit_button("Verify code and log in", type="primary", use_container_width=True)
-            else:
-                code = ""
-                login_submitted = st.form_submit_button("Send sign-in code", type="primary", use_container_width=True)
+        st.caption("Use the same email address and password you chose when creating your profile.")
+        with st.form("student_login_form"):
+            email = st.text_input("Email address", key="student_login_email")
+            password = st.text_input("Password", type="password", key="student_login_password")
+            login_submitted = st.form_submit_button("Log in", type="primary", use_container_width=True)
         if login_submitted:
             if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
                 st.warning("Enter a valid email address.")
-            elif not pending_email:
-                request_student_email_code(email)
-                st.rerun()
-            elif not code.strip():
-                st.warning("Enter the code sent to your email.")
+            elif not password:
+                st.warning("Enter your password.")
             else:
-                verify_student_email_code(email, code)
+                student_login_callback(email, password)
                 if st.session_state.get("campus_user_id"):
                     st.rerun()
                 st.error(st.session_state.pop("auth_notice", "Could not sign in. Try again."))
-        if pending_email and st.button("Use another email", key="reset_email_code"):
-            st.session_state.pop("pending_otp_email", None)
-            st.rerun()
 
 apply_theme()
 client, auth_user, auth_error = get_authenticated_client()
