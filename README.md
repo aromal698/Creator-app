@@ -2,9 +2,9 @@
 
 A two-app Streamlit campus community for B.Tech students. Both apps use one Supabase database.
 
-- `app.py` — student app: create an account with email/password and student details, then sign in again with that same email/password; seven bulb-cycled color themes; pebble-style navigation; groups/chats; notices, activities, calendar, AI study buddy/search, WhatsApp links, and feedback.
-- `creator_app.py` — separate password-protected Creator Studio: seven bulb-cycled color themes, AI-assisted notice/activity/calendar drafts, poster reading and poster creation/upload, special-day highlighting, public campus links, publish/edit/delete, group administration, and anonymous page-view totals.
-- `supabase_schema.sql` — shared tables, initial department and semester groups, campus links, anonymous page-view counts, poster storage bucket, and student access policies.
+- `app.py` — student app: email/password profiles, department and semester groups, WhatsApp-style chat with photo/camera and emoji support, daily red/yellow/green alerts, private creator chat, campus updates, calendar, and AI study tools.
+- `creator_app.py` — password-protected Creator Studio with campus post tools, group administration, private student inbox, and page-view totals.
+- `supabase_schema.sql` — shared database setup, including groups, chats, daily choices, private creator inbox, page views, and private group-photo storage.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
 
 Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Groq AI helps with study explanations, web search, the daily original campus thought, and creator drafts. Poster reading uses Groq's image-capable Qwen model and may require paid model access; the creator app asks before sending an uploaded image. A creator reviews content before publishing. AI cannot guarantee factual accuracy. Usage limits apply, and all app users share the app owner's quota.
@@ -13,7 +13,7 @@ Student pages show published campus content. Creator drafts and edit controls re
 
 1. Create a project at [Supabase](https://supabase.com/).
 2. In the project, open **SQL Editor → New query**.
-3. Open `supabase_schema.sql`, copy its full contents, paste into the SQL Editor, and click **Run**. This creates groups for the listed departments and semesters 1–8, chats, campus posts, feedback, campus links, anonymous page-view counts, the public poster bucket, and database access policies.
+3. Open `supabase_schema.sql`, copy its full contents, paste into the SQL Editor, and click **Run**. This creates groups for the listed departments and semesters 1–8, chats, daily alerts, a private creator inbox, page-view counts, storage buckets, and access policies.
    If the database already exists, run the updated SQL again. It adds missing columns/tables and refreshes policies without deleting existing posts or messages.
 4. In **Authentication → Sign In / Providers → Email**, enable **Allow new users to sign up**. Turn **Confirm email** off if students should start using the app immediately after creating their profile. The app does not use anonymous sign-ins.
 5. No Magic Link template is needed for this password-based flow. Students select **Create profile** to enter name, email, department, semester, and password. The next time they choose **Log in** and use the same email and password. Supabase’s supported password sign-in is documented [here](https://supabase.com/docs/reference/python/auth-signinwithpassword).
@@ -37,6 +37,9 @@ Create your WhatsApp Community and Channel, then copy their invite/share URLs. A
 ## 4. Student login, page views, and notice posters
 
 - New students create an email/password account and profile. Returning students sign in with that same email and password. With **Confirm email** off, Supabase does not require an email confirmation before the account can be used.
+- The student sidebar allows one red/yellow/green selection per day: red opens a private chat with the creator, yellow shows snowfall, and green adds ₹5 of in-app credit. This is not a cash payment.
+- Group chat photos and camera pictures are stored in a private bucket. Only members of the matching group can view them. Emoji and captions can also be sent.
+- The Creator Studio **Student inbox** page receives and replies to the private chats started by students.
 - The creator dashboard counts app page openings in **App page views** and **Views today**. These are not unique-student counts: returning to the same page during one login session is counted once. The log stores only the page name and timestamp, not a student ID, email, or chat message.
 - In **Creator Studio → Manage notices & activities**, add event details, optionally upload a photo, then select **Create poster picture from these details**. You can also upload a finished poster and attach it directly. Review the preview, then save or publish. Students see the attached image with the notice/activity.
 - Poster image storage uses a public Supabase Storage bucket so student browsers can display images. Upload only artwork intended to be public. An uploaded background photo is sent to Supabase only when saving or publishing; poster reading sends the selected file to Groq only after you confirm in the app.
