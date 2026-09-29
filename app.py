@@ -6,7 +6,7 @@ from io import BytesIO
 import os
 import re
 import time
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -144,7 +144,7 @@ def student_signup_callback(name, email, password, department, semester):
             st.session_state.profile_department = department
             st.session_state.profile_semester = semester
             st.session_state.nav_page = "Home"
-            st.session_state.auth_notice = "Your student profile is ready."
+            st.session_state.auth_notice = "Your profile is saved. Next time, choose Log in and use this same email and password. Your name, department, and semester stay with this account."
             return
         st.session_state.auth_notice = "Your account was created. Check your inbox for Supabase's email confirmation, then log in. To skip signup confirmation for new accounts, turn off Confirm email in Supabase Email provider settings before students create their profiles."
     except Exception as auth_error:
@@ -312,6 +312,14 @@ def google_calendar_event_url(post):
     return f"https://calendar.google.com/calendar/render?{query}"
 
 
+def whatsapp_app_share_link(app_url):
+    app_url = str(app_url or "").strip()
+    if not app_url.startswith("https://"):
+        return ""
+    message = quote(f"Open CampusConnect for campus notices, activities, and student groups: {app_url}", safe="")
+    return f"https://wa.me/?text={message}"
+
+
 def groq_browser_search(question):
     """Answer a question using Groq's GPT-OSS model and built-in browser search."""
     return groq_completion(
@@ -335,20 +343,42 @@ def groq_browser_search(question):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def campus_quote_of_the_day(day_key):
-    """Create one original, unattributed campus study quote per day for all visitors."""
+    """Create original daily campus thoughts in English and Malayalam."""
     answer, _ = groq_completion(
         [
             {
                 "role": "system",
                 "content": (
-                    "Write one short, original inspirational line for engineering students. "
-                    "Do not quote or attribute it to a real person. Return only the line, without quotation marks."
+                    "Write one short, original inspirational thought for engineering students, then translate its meaning naturally into Malayalam. "
+                    "Do not quote or attribute it to a real person. Return exactly two lines: English: <line> and Malayalam: <line>. "
+                    "Use Malayalam script on the Malayalam line. Do not add titles, numbering, markdown, or extra commentary."
                 ),
             },
             {"role": "user", "content": f"Create today's fresh campus study thought for {day_key}."},
         ]
     )
     return answer.strip().strip('"“”')
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def campus_calendar_special_summary(day_key, calendar_items):
+    """Summarize creator-highlighted special items using only today's campus calendar data."""
+    if not calendar_items:
+        return ""
+    answer, _ = groq_completion(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are CampusConnect's bilingual campus calendar guide. Summarize only the supplied events that the campus creator marked as special. "
+                    "Do not invent holidays, dates, or facts. Return exactly two short lines: English: <summary> and Malayalam: <summary>. "
+                    "Use Malayalam script for the Malayalam line."
+                ),
+            },
+            {"role": "user", "content": f"Date: {day_key}. Creator-marked calendar specials today:\n{calendar_items}"},
+        ]
+    )
+    return answer.strip()
 
 
 @st.fragment(run_every=8)
@@ -597,7 +627,7 @@ def show_login():
         return
     auth_choice = st.radio("Choose an option", ["Create profile", "Log in"], horizontal=True, key="student_auth_choice")
     if auth_choice == "Create profile":
-        st.caption("Create your account with email and password, then enter your student details.")
+        st.caption("Create your profile once with email, password, name, department, and semester. Next time, choose Log in and use the same email and password to return to this saved profile.")
         with st.form("student_create_account"):
             new_name = st.text_input("Name")
             new_email = st.text_input("Email address")
@@ -693,6 +723,12 @@ if not profile_ready:
 st.session_state.setdefault("display_name", user_metadata.get("display_name", "Student"))
 st.session_state.setdefault("profile_department", user_metadata.get("department", DEPARTMENTS[0]))
 st.session_state.setdefault("profile_semester", user_metadata.get("semester", SEMESTERS[0]))
+if st.session_state.get("profile_department") not in DEPARTMENTS:
+    st.session_state.profile_department = DEPARTMENTS[0]
+try:
+    st.session_state.profile_semester = int(st.session_state.get("profile_semester", SEMESTERS[0]))
+except (TypeError, ValueError):
+    st.session_state.profile_semester = SEMESTERS[0]
 st.session_state.setdefault("active_group_id", None)
 today = datetime.now(INDIA_TZ).date()
 today_iso = today.isoformat()
@@ -700,6 +736,11 @@ uid = str(auth_user.id)
 pending_nav_page = st.session_state.pop("_pending_nav_page", None)
 if pending_nav_page:
     st.session_state.nav_page = pending_nav_page
+try:
+    selected_rows = client.table("student_daily_choices").select("choice").eq("user_id", uid).eq("choice_date", today_iso).limit(1).execute().data or []
+    daily_choice = selected_rows[0]["choice"] if selected_rows else None
+except Exception:
+    daily_choice = None
 
 with st.sidebar:
     avatar_name = str(st.session_state.get("display_name", "Student")).strip() or "Student"
@@ -727,42 +768,6 @@ with st.sidebar:
     )
     st.caption(st.session_state.get("student_email") or "Email-only student session")
     st.button("Sign out", on_click=sign_out_callback)
-    st.divider()
-    st.markdown("**🎨 Today's alert**")
-    try:
-        selected_rows = client.table("student_daily_choices").select("choice").eq("user_id", uid).eq("choice_date", today_iso).limit(1).execute().data or []
-        daily_choice = selected_rows[0]["choice"] if selected_rows else None
-        green_total = profile_green_total
-    except Exception:
-        daily_choice, green_total = None, 0
-        st.caption("Today's alert options appear after the creator updates the database setup.")
-    if not daily_choice:
-        red_col, yellow_col, green_col = st.columns(3)
-        clicked_choice = None
-        if red_col.button("🔴", key="daily_alert_red", help="Choose red to open a private chat with the campus creator.", use_container_width=True):
-            clicked_choice = "red"
-        if yellow_col.button("🟡", key="daily_alert_yellow", help="Choose yellow to see snow fall today.", use_container_width=True):
-            clicked_choice = "yellow"
-        if green_col.button("🟢", key="daily_alert_green", help="Choose green to earn a ₹5 in-app reward credit.", use_container_width=True):
-            clicked_choice = "green"
-        if clicked_choice:
-            try:
-                client.table("student_daily_choices").insert({
-                    "user_id": uid, "choice_date": today_iso, "choice": clicked_choice,
-                }).execute()
-                if clicked_choice == "red":
-                    st.session_state._pending_nav_page = "Chat with Creator"
-                st.rerun()
-            except Exception:
-                st.error("Your daily choice could not be saved. Please ask the creator to run the updated database setup.")
-        st.caption("Pick one option per day. Green adds in-app credit, not a cash payment.")
-    else:
-        choice_labels = {"red": "🔴 Private creator chat", "yellow": "🟡 Snowfall", "green": "🟢 ₹5 reward credit"}
-        st.success(f"Today's choice: {choice_labels.get(daily_choice, daily_choice)}")
-        st.caption(f"In-app reward balance: ₹{green_total * 5}")
-        if daily_choice == "red" and st.button("Open private creator chat", key="open_creator_chat"):
-            st.session_state._pending_nav_page = "Chat with Creator"
-            st.rerun()
 
 # Store one anonymous view each time a signed-in student opens a different page.
 # No student ID, email, or message is sent to this aggregate analytics table.
@@ -797,14 +802,14 @@ if page == "Home":
         all_posts = client.table("campus_posts").select("*").eq("status", "published").order("event_date").execute().data or []
         groups = client.table("campus_groups").select("id").eq("is_active", True).execute().data or []
         mine = client.table("group_members").select("group_id").eq("user_id", uid).execute().data or []
-        today_activities = [p for p in all_posts if p["kind"] == "Activity" and str(p["event_date"]) == today_iso]
+        today_activities = [p for p in all_posts if p["kind"] == "Activity" and str(p["event_date"])[:10] == today_iso]
         specials = [p for p in today_activities if p.get("is_special")]
         notices = [p for p in all_posts if p["kind"] == "Notice"]
         important = [p for p in notices if p.get("is_important")]
         top_left, top_right = st.columns(2)
         with top_left:
             st.markdown(
-                f"<div class='date-card'><b>Today · {today.strftime('%A, %d %B %Y')}</b><br>Today's special day is highlighted below when a campus creator posts one.</div>",
+                f"<div class='date-card'><b>Today · {today.strftime('%A, %d %B %Y')}</b><br>Today's special day comes from the published campus calendar.</div>",
                 unsafe_allow_html=True,
             )
         with top_right:
@@ -820,32 +825,34 @@ if page == "Home":
                     st.write(featured_notice["body"])
                 else:
                     st.info("There are no pinned important notices right now.")
+        if notices:
+            st.subheader("📣 All campus notices")
+            for post in sorted(notices, key=lambda p: (bool(p.get("is_important")), str(p.get("created_at", ""))), reverse=True):
+                show_post(post)
+        else:
+            st.subheader("📣 All campus notices")
+            st.info("Published campus notices will appear here.")
         m1, m2, m3 = st.columns(3)
         m1.metric("Study groups", len(groups))
         m2.metric("Groups you joined", len(mine))
         m3.metric("Activities today", len(today_activities))
-        latest_notices = sorted(
-            [post for post in notices if not post.get("is_important")],
-            key=lambda p: str(p.get("created_at", "")),
-            reverse=True,
-        )
-        if latest_notices:
-            st.subheader("📰 Latest campus notices")
-            for post in latest_notices[:3]:
-                show_post(post)
-        elif not notices:
-            st.subheader("📌 Campus notices")
-            st.info("Published campus notices will appear here.")
-
         try:
             daily_quote = campus_quote_of_the_day(today_iso)
         except Exception:
             daily_quote = ""
         if daily_quote:
+            english_quote, malayalam_quote = "", ""
+            for quote_line in daily_quote.splitlines():
+                if quote_line.lower().startswith("english:"):
+                    english_quote = quote_line.split(":", 1)[1].strip().strip('"“”')
+                elif quote_line.lower().startswith("malayalam:"):
+                    malayalam_quote = quote_line.split(":", 1)[1].strip().strip('"“”')
+            if not english_quote and not malayalam_quote:
+                english_quote = daily_quote
             _, quote_column, _ = st.columns([1, 6, 1])
             with quote_column:
                 st.markdown(
-                    f"<div class='quote-card'><div class='quote-label'>✦ AI-GENERATED CAMPUS THOUGHT</div><div class='quote-text'>“{escape(daily_quote)}”</div><div class='quote-note'>An original thought for today · {today.strftime('%d %B')}</div></div>",
+                    f"<div class='quote-card'><div class='quote-label'>✦ TODAY'S AI CAMPUS THOUGHT · ഇന്നത്തെ ക്യാമ്പസ് ചിന്ത</div><div class='quote-text'><b>English</b><br>“{escape(english_quote)}”</div><div class='quote-text' lang='ml'><b>മലയാളം</b><br>“{escape(malayalam_quote)}”</div><div class='quote-note'>Original thought · {today.strftime('%d %B')}</div></div>",
                     unsafe_allow_html=True,
                 )
         else:
@@ -861,10 +868,21 @@ if page == "Home":
                 st.info("No campus activities have been posted for today.")
             st.subheader("✨ Today's special day")
             if specials:
+                special_calendar_items = "\n".join(
+                    f"{post['event_date']}: {post['title']} — {post.get('body', '')}"
+                    for post in specials
+                )
+                try:
+                    with st.spinner("Reading today's special from the campus calendar…"):
+                        special_summary = campus_calendar_special_summary(today_iso, special_calendar_items)
+                    if special_summary:
+                        st.info(special_summary)
+                except Exception:
+                    st.caption("Showing the creator-highlighted calendar details below.")
                 for post in specials:
                     show_post(post)
             else:
-                st.info("No special day has been highlighted today.")
+                st.info("No special day has been highlighted on today's campus calendar.")
         with right:
             upcoming = [p for p in all_posts if p["kind"] == "Activity" and str(p["event_date"])[:10] >= today_iso]
             st.subheader("🗓️ Coming up on campus")
@@ -876,17 +894,21 @@ if page == "Home":
             st.button("View campus calendar →", on_click=lambda: st.session_state.update(nav_page="Campus Calendar"))
             community_url = campus_setting("whatsapp_community_url", "WHATSAPP_COMMUNITY_URL")
             channel_url = campus_setting("whatsapp_channel_url", "WHATSAPP_CHANNEL_URL")
+            student_app_url = campus_setting("student_app_url", "STUDENT_APP_URL")
             if community_url.startswith("https://") or channel_url.startswith("https://"):
                 st.subheader("💬 WhatsApp campus spaces")
                 if community_url.startswith("https://"):
                     st.link_button("Join WhatsApp Community", community_url, use_container_width=True)
                 if channel_url.startswith("https://"):
                     st.link_button("Follow WhatsApp Channel", channel_url, use_container_width=True)
+            app_share_link = whatsapp_app_share_link(student_app_url)
+            if app_share_link:
+                st.link_button("📲 Share CampusConnect on WhatsApp", app_share_link, use_container_width=True)
     except Exception:
         st.error("Campus data could not be loaded. Check that the Supabase tables and student access policies are set up.")
 
 elif page == "Study Groups":
-    st.caption("Browse department and semester groups. Joining a group opens its chat.")
+    st.caption("Each department and semester has its own class chat (for example, CSE · Semester 3). Your department and semester are selected first; you can change the filters or create another group.")
     browse_tab, mine_tab, create_tab = st.tabs(["Browse groups", "My groups", "Create a group"])
     try:
         groups = client.table("campus_groups").select("*").eq("is_active", True).order("department").order("semester").execute().data or []
@@ -897,13 +919,25 @@ elif page == "Study Groups":
         st.error("Groups could not be loaded. Check Supabase setup and row access policies.")
     with browse_tab:
         f1, f2 = st.columns(2)
-        dep_filter = f1.selectbox("Department", ["All departments", *DEPARTMENTS], key="groups_department_filter")
-        sem_filter = f2.selectbox("Semester", ["All semesters", *SEMESTERS], key="groups_semester_filter")
+        current_department = st.session_state.get("profile_department", DEPARTMENTS[0])
+        try:
+            current_semester = int(st.session_state.get("profile_semester", SEMESTERS[0]))
+        except (TypeError, ValueError):
+            current_semester = SEMESTERS[0]
+        dep_options = ["All departments", *DEPARTMENTS]
+        sem_options = ["All semesters", *SEMESTERS]
+        dep_default = dep_options.index(current_department) if current_department in dep_options else 1
+        sem_default = sem_options.index(current_semester) if current_semester in sem_options else 1
+        dep_filter = f1.selectbox("Department", dep_options, index=dep_default, key="groups_department_filter")
+        sem_filter = f2.selectbox("Semester", sem_options, index=sem_default, key="groups_semester_filter")
         visible = [g for g in groups if (dep_filter == "All departments" or g["department"] == dep_filter) and (sem_filter == "All semesters" or g.get("semester") == sem_filter)]
+        visible.sort(key=lambda g: (not bool(g.get("is_default")), str(g.get("name", "")).lower()))
         for group in visible:
             with st.container(border=True):
                 info, action = st.columns([4, 1.2])
                 with info:
+                    if group.get("is_default") and group["department"] == current_department and group.get("semester") == current_semester:
+                        st.caption("YOUR DEPARTMENT · SEMESTER CHAT")
                     st.subheader(group["name"])
                     st.write(group.get("description") or "Student study and discussion group.")
                     st.caption(f"{group['department']} · {('Semester ' + str(group['semester'])) if group.get('semester') else 'All semesters'}")
@@ -1063,6 +1097,7 @@ elif page == "WhatsApp":
     st.write("Join the campus WhatsApp spaces for announcements and community discussion. These open in WhatsApp; the links are managed by campus creators.")
     community_url = campus_setting("whatsapp_community_url", "WHATSAPP_COMMUNITY_URL")
     channel_url = campus_setting("whatsapp_channel_url", "WHATSAPP_CHANNEL_URL")
+    student_app_url = campus_setting("student_app_url", "STUDENT_APP_URL")
     left, right = st.columns(2)
     with left:
         if community_url.startswith("https://"):
@@ -1074,6 +1109,11 @@ elif page == "WhatsApp":
             st.link_button("Follow WhatsApp Channel", channel_url, use_container_width=True)
         else:
             st.info("The campus creator has not added a WhatsApp Channel link yet.")
+    app_share_link = whatsapp_app_share_link(student_app_url)
+    if app_share_link:
+        st.link_button("📲 Share the student app on WhatsApp", app_share_link, type="primary", use_container_width=True)
+    else:
+        st.caption("The creator can add the public student app URL in Creator Studio → Campus links to enable WhatsApp sharing.")
 
 elif page == "AI Study Buddy":
     st.caption("Ask for a concept explanation, study plan, or hints. Check important course details with your faculty.")
@@ -1145,3 +1185,44 @@ elif page == "Feedback":
                 st.success("Thank you. Your feedback was sent to the campus creators.")
             except Exception:
                 st.error("Feedback could not be sent. Please try again later.")
+
+# Keep the once-per-day campus alert in the lower-right area of each student page.
+st.divider()
+_, alert_area = st.columns([2, 1])
+with alert_area:
+    with st.container(border=True):
+        st.markdown("**🎨 Today's alert**")
+        if not daily_choice:
+            red_col, yellow_col, green_col = st.columns(3)
+            clicked_choice = None
+            if red_col.button("🔴", key="daily_alert_red", help="Choose red to open a private chat with the campus creator.", use_container_width=True):
+                clicked_choice = "red"
+            if yellow_col.button("🟡", key="daily_alert_yellow", help="Choose yellow to see snow fall today.", use_container_width=True):
+                clicked_choice = "yellow"
+            if green_col.button("🟢", key="daily_alert_green", help="Choose green to earn a ₹5 in-app reward credit.", use_container_width=True):
+                clicked_choice = "green"
+            if clicked_choice:
+                try:
+                    client.table("student_daily_choices").insert({
+                        "user_id": uid, "choice_date": today_iso, "choice": clicked_choice,
+                    }).execute()
+                    if clicked_choice == "red":
+                        st.session_state._pending_nav_page = "Chat with Creator"
+                    st.rerun()
+                except Exception:
+                    st.error("Your daily choice could not be saved. Please ask the creator to run the updated database setup.")
+            st.caption("Choose one per day. Green adds in-app credit, not cash.")
+        else:
+            choice_labels = {"red": "🔴 Private creator chat", "yellow": "🟡 Snowfall", "green": "🟢 ₹5 reward credit"}
+            st.success(f"Today's choice: {choice_labels.get(daily_choice, daily_choice)}")
+            st.caption(f"In-app reward balance: ₹{profile_green_total * 5}")
+            if daily_choice == "red" and st.button("Open private creator chat", key="open_creator_chat"):
+                st.session_state._pending_nav_page = "Chat with Creator"
+                st.rerun()
+
+if page == "Feedback":
+    creator_signature = campus_setting("campus_creator_name", "CAMPUS_CREATOR_NAME") or "Campus Creator"
+    st.markdown(
+        f"<div style='text-align:right;margin:1rem .5rem 0;color:#526861;font-style:italic'>Regards,<br><b>{escape(creator_signature)}</b><br>Campus Creator</div>",
+        unsafe_allow_html=True,
+    )
