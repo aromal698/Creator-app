@@ -6,7 +6,6 @@ from html import escape
 from io import BytesIO
 import os
 import re
-import secrets as secure_random
 import time
 from urllib.parse import quote, urlencode
 from uuid import uuid4
@@ -21,11 +20,11 @@ from supabase import create_client
 
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other"]
 SEMESTERS = list(range(1, 9))
-NAV_PAGES = ["Home", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "WhatsApp", "Feedback"]
+NAV_PAGES = ["Home", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "Feedback"]
 NAV_PAGE_ICONS = {
     "Home": "⌂", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
     "Campus Calendar": "📅", "Campus Activities": "🎪", "Notices": "📌",
-    "AI Study Buddy": "✨", "AI Search": "🔎", "WhatsApp": "📲", "Feedback": "💡",
+    "AI Study Buddy": "✨", "AI Search": "🔎", "Feedback": "💡",
 }
 THEMES = [
     {"name": "White", "bg": "#f7faf8", "side": "#edf3ef", "surface": "#ffffff", "text": "#172b27", "muted": "#526861", "accent": "#176b5b", "soft": "#e3f1e8", "border": "#d2e3d8", "hero1": "#e3f1e8", "hero2": "#f2f6ee"},
@@ -813,6 +812,25 @@ if page == "Home":
         unsafe_allow_html=True,
     )
     st.write("")
+    community_url = campus_setting("whatsapp_community_url", "WHATSAPP_COMMUNITY_URL")
+    channel_url = campus_setting("whatsapp_channel_url", "WHATSAPP_CHANNEL_URL")
+    student_app_url = campus_setting("student_app_url", "STUDENT_APP_URL")
+    with st.container(border=True):
+        st.markdown("#### 📲 WhatsApp campus links")
+        wa_links = st.columns(3)
+        if community_url.startswith("https://"):
+            wa_links[0].link_button("Join WhatsApp Community", community_url, use_container_width=True)
+        else:
+            wa_links[0].caption("Community link not added yet")
+        if channel_url.startswith("https://"):
+            wa_links[1].link_button("Follow WhatsApp Channel", channel_url, use_container_width=True)
+        else:
+            wa_links[1].caption("Channel link not added yet")
+        app_share_link = whatsapp_app_share_link(student_app_url)
+        if app_share_link:
+            wa_links[2].link_button("Share this app", app_share_link, use_container_width=True)
+        else:
+            wa_links[2].caption("App share link not set yet")
     try:
         all_posts = client.table("campus_posts").select("*").eq("status", "published").order("event_date").execute().data or []
         groups = client.table("campus_groups").select("id").eq("is_active", True).execute().data or []
@@ -921,39 +939,12 @@ if page == "Home":
             else:
                 st.caption("No upcoming activities have been posted.")
             st.button("View campus calendar →", on_click=lambda: st.session_state.update(nav_page="Campus Calendar"))
-            community_url = campus_setting("whatsapp_community_url", "WHATSAPP_COMMUNITY_URL")
-            channel_url = campus_setting("whatsapp_channel_url", "WHATSAPP_CHANNEL_URL")
-            student_app_url = campus_setting("student_app_url", "STUDENT_APP_URL")
-            if community_url.startswith("https://") or channel_url.startswith("https://"):
-                st.subheader("💬 WhatsApp campus spaces")
-                if community_url.startswith("https://"):
-                    st.link_button("Join WhatsApp Community", community_url, use_container_width=True)
-                if channel_url.startswith("https://"):
-                    st.link_button("Follow WhatsApp Channel", channel_url, use_container_width=True)
-            app_share_link = whatsapp_app_share_link(student_app_url)
-            if app_share_link:
-                st.link_button("📲 Share CampusConnect on WhatsApp", app_share_link, use_container_width=True)
     except Exception:
         st.error("Campus data could not be loaded. Check that the Supabase tables and student access policies are set up.")
 
 elif page == "Study Groups":
     st.caption("Each department and semester has its own class chat (for example, CSE · Semester 3). Your department and semester are selected first; you can change the filters or create another group.")
-    pending_invite_code = st.session_state.get("private_group_invite_code")
-    if pending_invite_code:
-        invite_group_name = st.session_state.get("private_group_invite_name", "Private group")
-        invite_group_id = st.session_state.get("private_group_invite_id")
-        with st.container(border=True):
-            st.success(f"Private group created: {invite_group_name}. Copy this code and share it only with invited members.")
-            st.code(pending_invite_code, language=None)
-            show_chat_col, hide_code_col = st.columns(2)
-            if invite_group_id:
-                show_chat_col.button("Open this group chat", key="open_new_private_group_chat", type="primary", on_click=go_to_chat, args=(invite_group_id,))
-            if hide_code_col.button("Hide code", key="hide_private_group_code"):
-                st.session_state.pop("private_group_invite_code", None)
-                st.session_state.pop("private_group_invite_name", None)
-                st.session_state.pop("private_group_invite_id", None)
-                st.rerun()
-    browse_tab, mine_tab, create_tab, join_code_tab = st.tabs(["Browse groups", "My groups", "Create a group", "Join with code"])
+    browse_tab, mine_tab, create_tab, join_code_tab = st.tabs(["Browse groups", "My groups", "Create a public group", "Join with code"])
     try:
         groups = client.table("campus_groups").select("*").eq("is_active", True).order("department").order("semester").execute().data or []
         mine = client.table("group_members").select("group_id").eq("user_id", uid).execute().data or []
@@ -1008,35 +999,13 @@ elif page == "Study Groups":
             c1, c2 = st.columns(2)
             group_department = c1.selectbox("Department", ["Cross-department", *DEPARTMENTS])
             group_semester = c2.selectbox("Semester", ["Any semester", *SEMESTERS])
-            make_private = st.checkbox("Private group — classmates need an invite code to join")
-            create_group = st.form_submit_button("Create group and join", type="primary")
+            create_group = st.form_submit_button("Create public group and join", type="primary")
+        st.caption("For a private group, ask the campus creator for its invite code, then use Join with code.")
         if create_group:
             if not group_name.strip():
                 st.warning("Enter a group name first.")
             else:
                 try:
-                    if make_private:
-                        code_alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-                        invite_code = "".join(secure_random.choice(code_alphabet) for _ in range(10))
-                        result = client.rpc("create_private_campus_group", {
-                            "p_name": group_name.strip(),
-                            "p_department": group_department,
-                            "p_semester": None if group_semester == "Any semester" else group_semester,
-                            "p_description": group_description.strip(),
-                            "p_display_name": name,
-                            "p_code_hash": private_group_code_hash(invite_code),
-                        }).execute().data
-                        if isinstance(result, list):
-                            result = result[0] if result else None
-                        if isinstance(result, dict):
-                            result = result.get("create_private_campus_group") or result.get("id")
-                        if not result:
-                            raise ValueError("The private group was not returned by Supabase.")
-                        st.session_state.private_group_invite_code = invite_code
-                        st.session_state.private_group_invite_name = group_name.strip()
-                        st.session_state.private_group_invite_id = str(result)
-                        st.session_state.active_group_id = str(result)
-                        st.rerun()
                     result = client.table("campus_groups").insert(
                         {
                             "name": group_name.strip(),
@@ -1053,7 +1022,7 @@ elif page == "Study Groups":
                     st.session_state._pending_nav_page = "Group Chat"
                     st.rerun()
                 except Exception:
-                    st.error("The group could not be created. If it is private, run the updated Supabase setup to enable secure invite codes.")
+                    st.error("The group could not be created. Ask the campus creator to check the group setup, then try again.")
     with join_code_tab:
         st.caption("Enter the invite code shared by the private group's creator. Only people with the code can join.")
         with st.form("join_private_group_form", clear_on_submit=True):
@@ -1189,26 +1158,7 @@ elif page == "AI Search":
             st.caption("No separate source links were returned. Check citations in the answer and verify important details.")
 
 elif page == "WhatsApp":
-    st.write("Join the campus WhatsApp spaces for announcements and community discussion. These open in WhatsApp; the links are managed by campus creators.")
-    community_url = campus_setting("whatsapp_community_url", "WHATSAPP_COMMUNITY_URL")
-    channel_url = campus_setting("whatsapp_channel_url", "WHATSAPP_CHANNEL_URL")
-    student_app_url = campus_setting("student_app_url", "STUDENT_APP_URL")
-    left, right = st.columns(2)
-    with left:
-        if community_url.startswith("https://"):
-            st.link_button("Open WhatsApp Community", community_url, type="primary", use_container_width=True)
-        else:
-            st.info("The campus creator has not added a WhatsApp Community link yet.")
-    with right:
-        if channel_url.startswith("https://"):
-            st.link_button("Follow WhatsApp Channel", channel_url, use_container_width=True)
-        else:
-            st.info("The campus creator has not added a WhatsApp Channel link yet.")
-    app_share_link = whatsapp_app_share_link(student_app_url)
-    if app_share_link:
-        st.link_button("📲 Share the student app on WhatsApp", app_share_link, type="primary", use_container_width=True)
-    else:
-        st.caption("The creator can add the public student app URL in Creator Studio → Campus links to enable WhatsApp sharing.")
+    st.info("WhatsApp Community, Channel, and app-sharing links are on the Home page.")
 
 elif page == "AI Study Buddy":
     st.caption("Ask for a concept explanation, study plan, or hints. Check important course details with your faculty.")
@@ -1318,6 +1268,6 @@ with alert_area:
 if page == "Feedback":
     creator_signature = campus_setting("campus_creator_name", "CAMPUS_CREATOR_NAME") or "Campus Creator"
     st.markdown(
-        f"<div style='text-align:right;margin:1rem .5rem 0;color:#526861;font-style:italic'>Regards,<br><b>{escape(creator_signature)}</b><br>Campus Creator</div>",
+        f"<div style='text-align:right;margin:1rem .5rem 0;color:#526861;font-style:italic'><b>{escape(creator_signature)}</b></div>",
         unsafe_allow_html=True,
     )
