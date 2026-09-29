@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import os
 import re
+import secrets as secure_random
 from urllib.parse import quote
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -814,11 +815,22 @@ elif page == "Campus links":
 elif page == "Group admin":
     add_tab, manage_tab = st.tabs(["Create a group", "Manage groups and members"])
     with add_tab:
+        latest_private_code = st.session_state.get("creator_private_group_code")
+        if latest_private_code:
+            with st.container(border=True):
+                st.success(f"Private group created: {st.session_state.get('creator_private_group_name', 'Private group')}. Share this code with invited students.")
+                st.code(latest_private_code, language=None)
+                if st.button("Hide invite code", key="hide_creator_private_code"):
+                    st.session_state.pop("creator_private_group_code", None)
+                    st.session_state.pop("creator_private_group_name", None)
+                    st.rerun()
+        st.caption("Create public groups for all students, or private groups that students can enter only with a code you share.")
         name = st.text_input("Group name", key="admin_group_name")
         description = st.text_area("Purpose or description", key="admin_group_description")
         c1, c2 = st.columns(2)
         department = c1.selectbox("Department", DEPARTMENTS, key="admin_group_department")
         semester = c2.selectbox("Semester", ["Any semester", *range(1, 9)], key="admin_group_semester")
+        make_private = st.checkbox("Private group — students need my invite code to join", key="admin_group_private")
         if st.button("✨ Suggest group purpose with free AI", disabled=not name.strip()):
             try:
                 suggestion = ai_group_description(name.strip(), department, semester, creator_ai_language)
@@ -833,8 +845,10 @@ elif page == "Group admin":
             if not name.strip():
                 st.warning("Enter a group name.")
             else:
+                invite_code = "".join(secure_random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(10)) if make_private else ""
+                group_id = None
                 try:
-                    db.table("campus_groups").insert(
+                    result = db.table("campus_groups").insert(
                         {
                             "name": name.strip(),
                             "department": department,
@@ -843,11 +857,28 @@ elif page == "Group admin":
                             "created_by_name": creator_name,
                             "is_default": False,
                             "is_active": True,
+                            "is_private": bool(make_private),
                         }
-                    ).execute()
-                    st.success("Group created and visible to students.")
-                except Exception:
-                    st.error("Could not create this group.")
+                    ).execute().data or []
+                    if not result:
+                        raise ValueError("Supabase did not return the new group.")
+                    group_id = result[0]["id"]
+                    if make_private:
+                        db.table("private_group_invites").insert({
+                            "group_id": group_id,
+                            "code_hash": hashlib.sha256(invite_code.encode("utf-8")).hexdigest(),
+                        }).execute()
+                        st.session_state.creator_private_group_code = invite_code
+                        st.session_state.creator_private_group_name = name.strip()
+                        st.rerun()
+                    st.success("Public group created and visible to students.")
+                except Exception as exc:
+                    if group_id and make_private:
+                        try:
+                            db.table("campus_groups").delete().eq("id", group_id).execute()
+                        except Exception:
+                            pass
+                    st.error(f"Could not create this group. Run the latest supabase_schema.sql first. Details: {str(exc)[:220]}")
 
     with manage_tab:
         try:
