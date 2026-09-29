@@ -1,10 +1,12 @@
 """CampusConnect student app. Campus content is read-only here; creator tools live in creator_app.py."""
 
 from datetime import date, datetime, timedelta, timezone
+import hashlib
 from html import escape
 from io import BytesIO
 import os
 import re
+import secrets as secure_random
 import time
 from urllib.parse import quote, urlencode
 from uuid import uuid4
@@ -323,6 +325,11 @@ def whatsapp_app_share_link(app_url):
         return ""
     message = quote(f"Open CampusConnect for campus notices, activities, and student groups: {app_url}", safe="")
     return f"https://wa.me/?text={message}"
+
+
+def private_group_code_hash(code):
+    normalized = "".join(str(code or "").upper().split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def groq_browser_search(question):
@@ -820,6 +827,23 @@ if page == "Home":
                 f"<div class='date-card'><b>Today · {today.strftime('%A, %d %B %Y')}</b><br>Today's special day comes from the published campus calendar.</div>",
                 unsafe_allow_html=True,
             )
+            if specials:
+                st.markdown("### ✨ Today's special · ഇന്നത്തെ വിശേഷം")
+                special_calendar_items = "\n".join(
+                    f"{post['event_date']}: {post['title']} — {post.get('body', '')}"
+                    for post in specials
+                )
+                try:
+                    with st.spinner("AI is preparing today's calendar highlight…"):
+                        special_summary = campus_calendar_special_summary(today_iso, special_calendar_items)
+                    if special_summary:
+                        st.info(special_summary)
+                except Exception:
+                    st.caption("AI summary is unavailable; the creator's calendar details are shown below.")
+                for special_post in specials:
+                    st.markdown(f"**{special_post['title']}**")
+            else:
+                st.caption("No creator-highlighted special day is on today's calendar.")
         with top_right:
             with st.container(border=True):
                 st.subheader("📌 Important campus notice")
@@ -835,8 +859,16 @@ if page == "Home":
                     st.info("There are no pinned important notices right now.")
         if notices:
             st.subheader("📣 All campus notices")
-            for post in sorted(notices, key=lambda p: (bool(p.get("is_important")), str(p.get("created_at", ""))), reverse=True):
-                show_post(post)
+            ordered_notices = sorted(
+                notices,
+                key=lambda p: (bool(p.get("is_important")), str(p.get("created_at", ""))),
+                reverse=True,
+            )
+            for row_start in range(0, len(ordered_notices), 3):
+                notice_columns = st.columns(3)
+                for notice_column, notice_post in zip(notice_columns, ordered_notices[row_start:row_start + 3]):
+                    with notice_column:
+                        show_post(notice_post)
         else:
             st.subheader("📣 All campus notices")
             st.info("Published campus notices will appear here.")
@@ -874,19 +906,8 @@ if page == "Home":
                     show_post(post)
             else:
                 st.info("No campus activities have been posted for today.")
-            st.subheader("✨ Today's special day")
+            st.subheader("✨ Today's special-day details")
             if specials:
-                special_calendar_items = "\n".join(
-                    f"{post['event_date']}: {post['title']} — {post.get('body', '')}"
-                    for post in specials
-                )
-                try:
-                    with st.spinner("Reading today's special from the campus calendar…"):
-                        special_summary = campus_calendar_special_summary(today_iso, special_calendar_items)
-                    if special_summary:
-                        st.info(special_summary)
-                except Exception:
-                    st.caption("Showing the creator-highlighted calendar details below.")
                 for post in specials:
                     show_post(post)
             else:
@@ -917,7 +938,22 @@ if page == "Home":
 
 elif page == "Study Groups":
     st.caption("Each department and semester has its own class chat (for example, CSE · Semester 3). Your department and semester are selected first; you can change the filters or create another group.")
-    browse_tab, mine_tab, create_tab = st.tabs(["Browse groups", "My groups", "Create a group"])
+    pending_invite_code = st.session_state.get("private_group_invite_code")
+    if pending_invite_code:
+        invite_group_name = st.session_state.get("private_group_invite_name", "Private group")
+        invite_group_id = st.session_state.get("private_group_invite_id")
+        with st.container(border=True):
+            st.success(f"Private group created: {invite_group_name}. Copy this code and share it only with invited members.")
+            st.code(pending_invite_code, language=None)
+            show_chat_col, hide_code_col = st.columns(2)
+            if invite_group_id:
+                show_chat_col.button("Open this group chat", key="open_new_private_group_chat", type="primary", on_click=go_to_chat, args=(invite_group_id,))
+            if hide_code_col.button("Hide code", key="hide_private_group_code"):
+                st.session_state.pop("private_group_invite_code", None)
+                st.session_state.pop("private_group_invite_name", None)
+                st.session_state.pop("private_group_invite_id", None)
+                st.rerun()
+    browse_tab, mine_tab, create_tab, join_code_tab = st.tabs(["Browse groups", "My groups", "Create a group", "Join with code"])
     try:
         groups = client.table("campus_groups").select("*").eq("is_active", True).order("department").order("semester").execute().data or []
         mine = client.table("group_members").select("group_id").eq("user_id", uid).execute().data or []
@@ -962,6 +998,8 @@ elif page == "Study Groups":
             with st.container(border=True):
                 st.subheader(group["name"])
                 st.write(group.get("description") or "Student study and discussion group.")
+                if group.get("is_private"):
+                    st.caption("🔒 Private group · You joined with its invite code.")
                 st.button("Open group chat", key=f"mine_open_{group['id']}", type="primary", on_click=go_to_chat, args=(group["id"],))
     with create_tab:
         with st.form("new_group_form", clear_on_submit=True):
@@ -970,12 +1008,35 @@ elif page == "Study Groups":
             c1, c2 = st.columns(2)
             group_department = c1.selectbox("Department", ["Cross-department", *DEPARTMENTS])
             group_semester = c2.selectbox("Semester", ["Any semester", *SEMESTERS])
+            make_private = st.checkbox("Private group — classmates need an invite code to join")
             create_group = st.form_submit_button("Create group and join", type="primary")
         if create_group:
             if not group_name.strip():
                 st.warning("Enter a group name first.")
             else:
                 try:
+                    if make_private:
+                        code_alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+                        invite_code = "".join(secure_random.choice(code_alphabet) for _ in range(10))
+                        result = client.rpc("create_private_campus_group", {
+                            "p_name": group_name.strip(),
+                            "p_department": group_department,
+                            "p_semester": None if group_semester == "Any semester" else group_semester,
+                            "p_description": group_description.strip(),
+                            "p_display_name": name,
+                            "p_code_hash": private_group_code_hash(invite_code),
+                        }).execute().data
+                        if isinstance(result, list):
+                            result = result[0] if result else None
+                        if isinstance(result, dict):
+                            result = result.get("create_private_campus_group") or result.get("id")
+                        if not result:
+                            raise ValueError("The private group was not returned by Supabase.")
+                        st.session_state.private_group_invite_code = invite_code
+                        st.session_state.private_group_invite_name = group_name.strip()
+                        st.session_state.private_group_invite_id = str(result)
+                        st.session_state.active_group_id = str(result)
+                        st.rerun()
                     result = client.table("campus_groups").insert(
                         {
                             "name": group_name.strip(),
@@ -992,7 +1053,33 @@ elif page == "Study Groups":
                     st.session_state._pending_nav_page = "Group Chat"
                     st.rerun()
                 except Exception:
-                    st.error("The group could not be created. Check the Supabase group policies and try again.")
+                    st.error("The group could not be created. If it is private, run the updated Supabase setup to enable secure invite codes.")
+    with join_code_tab:
+        st.caption("Enter the invite code shared by the private group's creator. Only people with the code can join.")
+        with st.form("join_private_group_form", clear_on_submit=True):
+            private_code_entry = st.text_input("Private group invite code", max_chars=32)
+            join_private_submitted = st.form_submit_button("Join private group", type="primary")
+        if join_private_submitted:
+            normalized_code = "".join(private_code_entry.upper().split())
+            if len(normalized_code) < 8:
+                st.warning("Enter the invite code shared by the group creator.")
+            else:
+                try:
+                    result = client.rpc("join_private_campus_group", {
+                        "p_code_hash": private_group_code_hash(normalized_code),
+                        "p_display_name": name,
+                    }).execute().data
+                    if isinstance(result, list):
+                        result = result[0] if result else None
+                    if isinstance(result, dict):
+                        result = result.get("join_private_campus_group") or result.get("id")
+                    if not result:
+                        raise ValueError("The private group was not returned by Supabase.")
+                    st.session_state.active_group_id = str(result)
+                    st.session_state._pending_nav_page = "Group Chat"
+                    st.rerun()
+                except Exception:
+                    st.error("That invite code is not valid, or the private group is no longer active. Check the code and try again.")
 
 elif page == "Group Chat":
     try:
@@ -1015,7 +1102,7 @@ elif page == "Group Chat":
         initials = escape("".join(part[0] for part in str(current_group["name"]).split()[:2]).upper()) or "G"
         group_title = escape(str(current_group["name"]))
         st.markdown(
-            f"<div class='chat-header'><div class='chat-avatar'>{initials}</div><div><div class='chat-header-title'>{group_title}</div><div class='chat-header-subtitle'>{escape(str(current_group['department']))} · WhatsApp-style group chat</div></div></div>",
+            f"<div class='chat-header'><div class='chat-avatar'>{initials}</div><div><div class='chat-header-title'>{group_title}</div><div class='chat-header-subtitle'>{escape(str(current_group['department']))} · {'Private · invite code required' if current_group.get('is_private') else 'WhatsApp-style group chat'}</div></div></div>",
             unsafe_allow_html=True,
         )
         st.caption("Only signed-in group members can read and send messages. This chat refreshes about every 8 seconds while open.")
