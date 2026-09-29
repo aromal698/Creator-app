@@ -140,6 +140,12 @@ def student_access_callback(name, email, password):
         if not credential_error:
             st.session_state.auth_notice = auth_setup_help(sign_in_error)
             return
+        if not name.strip():
+            st.session_state.auth_notice = (
+                "If this is your first visit, enter your name too so CampusConnect can create your account. "
+                "If you already have an account, check that you entered the same email and password you used before."
+            )
+            return
 
     try:
         response = client.auth.sign_up({
@@ -450,22 +456,22 @@ def show_login():
         theme_control()
     st.markdown("<div class='eyebrow'>STUDENT SIGN IN</div>", unsafe_allow_html=True)
     st.title("Welcome to CampusConnect")
-    st.write("Enter your name, email, and a password. The first visit creates your account; next time, use the same email and password.")
+    st.write("First visit: enter your name, email, and password to create your account. Returning student: enter the same email and password; leave the name blank.")
     auth_notice = st.session_state.pop("auth_notice", None)
     if auth_notice and "sign-in failed" not in auth_notice.lower():
         st.info(auth_notice)
     if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
         st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
         return
-    st.caption("First visit: this form creates your account. Later: use the same email and password. Supabase still enforces its password-length rule.")
+    st.caption("Your name is needed only the first time. Use your same email and password whenever you return. Supabase still enforces its password-length rule.")
     with st.form("student_access_form"):
-        name = st.text_input("Your name", key="student_access_name")
+        name = st.text_input("Your name (first visit only)", key="student_access_name")
         email = st.text_input("Email address", key="student_access_email")
         password = st.text_input("Choose a password and remember it", type="password", key="student_access_password")
         submitted = st.form_submit_button("Continue to CampusConnect", type="primary", use_container_width=True)
     if submitted:
-        if not name.strip() or "@" not in email or "." not in email.rsplit("@", 1)[-1] or not password:
-            st.warning("Enter your name, a valid email address, and a password.")
+        if "@" not in email or "." not in email.rsplit("@", 1)[-1] or not password:
+            st.warning("Enter a valid email address and your password. Add your name the first time you create an account.")
         else:
             student_access_callback(name, email, password)
             st.rerun()
