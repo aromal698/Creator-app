@@ -373,7 +373,7 @@ st.sidebar.markdown("# 🛠️ Creator Studio")
 st.sidebar.caption("Private tools for campus updates and group administration.")
 page = st.sidebar.radio(
     "Admin sections",
-    ["Creator dashboard", "Manage campus calendar", "Manage notices & activities", "Campus links", "Group admin"],
+    ["Creator dashboard", "Student inbox", "Manage campus calendar", "Manage notices & activities", "Campus links", "Group admin"],
     key="creator_page",
     label_visibility="collapsed",
 )
@@ -417,12 +417,61 @@ if page == "Creator dashboard":
         m4, m5 = st.columns(2)
         m4.metric("App page views", views_total)
         m5.metric("Views today", views_today)
+        try:
+            incoming_student_messages = db.table("student_creator_messages").select("id", count="exact").eq("sender_role", "student").execute().count or 0
+            st.metric("Private student messages", incoming_student_messages)
+            if st.button("Open student inbox →", key="dashboard_open_inbox"):
+                st.session_state.creator_page = "Student inbox"
+                st.rerun()
+        except Exception:
+            st.caption("Private student inbox appears after you run the updated database setup.")
         st.caption("Views count page openings by signed-in students, not unique students. No student identity or chat content is stored.")
         st.info("Create or edit notices and activities in the next section. Only published items appear in the student app; drafts stay here.")
         st.info("Published activities and special days also appear in the student Campus Calendar. AI can draft or rewrite wording; review it before publishing.")
         st.info("Manage starter groups, created groups, and group availability in Group admin.")
     except Exception:
         st.error("Could not load admin data. Run supabase_schema.sql and check the service key.")
+
+elif page == "Student inbox":
+    st.caption("Private messages started by students from the red daily alert. Replies appear in their student app.")
+    try:
+        inbox_rows = db.table("student_creator_messages").select("*").order("created_at").limit(1000).execute().data or []
+        student_names = {}
+        for row in inbox_rows:
+            student_names[row["student_id"]] = row["student_name"]
+        if not student_names:
+            st.info("No student messages yet.")
+        else:
+            student_ids = sorted(student_names)
+            selected_student = st.selectbox(
+                "Choose a student conversation", student_ids,
+                format_func=lambda student_id: f"{student_names[student_id]} · {student_id[:8]}",
+            )
+            for row in [item for item in inbox_rows if item["student_id"] == selected_student]:
+                with st.chat_message("user" if row["sender_role"] == "student" else "assistant"):
+                    st.caption(f"{row['student_name'] if row['sender_role'] == 'student' else creator_name} · {str(row['created_at'])[:16].replace('T', ' ')}")
+                    st.write(row["message"])
+            with st.form("creator_inbox_reply", clear_on_submit=True):
+                reply = st.text_area("Reply privately", max_chars=2000)
+                send_reply = st.form_submit_button("Send reply", type="primary")
+            if send_reply:
+                if not reply.strip():
+                    st.warning("Write a reply first.")
+                else:
+                    student_row = next(item for item in inbox_rows if item["student_id"] == selected_student)
+                    try:
+                        db.table("student_creator_messages").insert({
+                            "student_id": selected_student,
+                            "student_name": student_row["student_name"],
+                            "sender_role": "creator",
+                            "message": reply.strip(),
+                        }).execute()
+                        st.success("Your reply was sent to the student.")
+                        st.rerun()
+                    except Exception:
+                        st.error("The reply could not be saved. Run the updated Supabase schema and retry.")
+    except Exception:
+        st.error("Student messages could not be loaded. Run the updated Supabase schema first.")
 
 elif page == "Manage campus calendar":
     st.caption("Creator-controlled campus activities and special days. Published items appear on the student home page and Campus Calendar.")
