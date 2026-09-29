@@ -104,6 +104,7 @@ def theme_control():
 
 def creator_sign_out():
     st.session_state.creator_authenticated = False
+    st.session_state.pop("creator_login_name", None)
     st.session_state.creator_page = "Creator dashboard"
 
 
@@ -339,14 +340,22 @@ def creator_login():
         st.error("Set CAMPUS_CREATOR_PASSWORD in this Creator Studio app's Streamlit Secrets before using the admin tools.")
         return False
     with st.form("creator_login_form"):
+        entered_name = st.text_input(
+            "Creator name",
+            value=str(secret("CAMPUS_CREATOR_NAME", "")).strip(),
+            placeholder="Your name",
+        )
         entered = st.text_input("Creator password", type="password")
         submitted = st.form_submit_button("Sign in", type="primary")
     if submitted:
-        if hmac.compare_digest(entered, str(expected)):
+        if not entered_name.strip():
+            st.warning("Enter your creator name.")
+        elif hmac.compare_digest(entered, str(expected)):
+            st.session_state.creator_login_name = entered_name.strip()
             st.session_state.creator_authenticated = True
             st.rerun()
         else:
-            st.error("That password did not match.")
+            st.error("The creator password did not match. Check it and try again.")
     return False
 
 
@@ -373,7 +382,8 @@ try:
 except Exception:
     creator_public_settings = {}
 creator_name = str(
-    creator_public_settings.get("campus_creator_name")
+    st.session_state.get("creator_login_name")
+    or creator_public_settings.get("campus_creator_name")
     or secret("CAMPUS_CREATOR_NAME", "Campus Creator")
 ).strip() or "Campus Creator"
 today = datetime.now(INDIA_TZ).date()
