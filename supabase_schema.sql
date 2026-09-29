@@ -152,7 +152,7 @@ revoke all on public.campus_groups, public.group_members, public.group_messages,
 
 grant select, insert on public.campus_groups to authenticated;
 grant select, insert, delete on public.group_members to authenticated;
-grant select, insert on public.group_messages to authenticated;
+grant select, insert, delete on public.group_messages to authenticated;
 grant select on public.campus_posts to authenticated;
 grant insert on public.student_feedback to authenticated;
 grant select on public.campus_settings to authenticated;
@@ -203,6 +203,17 @@ create policy "Group members send their own messages"
     with check (
         sender_id = (select auth.uid())
         and (image_path is null or image_path like group_messages.group_id::text || '/' || (select auth.uid())::text || '/%')
+        and exists (
+            select 1 from public.group_members m
+            where m.group_id = group_messages.group_id and m.user_id = (select auth.uid())
+        )
+    );
+
+drop policy if exists "Students delete their own group messages" on public.group_messages;
+create policy "Students delete their own group messages"
+    on public.group_messages for delete to authenticated
+    using (
+        sender_id = (select auth.uid())
         and exists (
             select 1 from public.group_members m
             where m.group_id = group_messages.group_id and m.user_id = (select auth.uid())
@@ -269,6 +280,19 @@ create policy "Group members read group photos"
     on storage.objects for select to authenticated
     using (
         bucket_id = 'group-chat-photos'
+        and exists (
+            select 1 from public.group_members m
+            where m.group_id::text = (storage.foldername(name))[1]
+              and m.user_id = (select auth.uid())
+        )
+    );
+
+drop policy if exists "Students delete their own group photos" on storage.objects;
+create policy "Students delete their own group photos"
+    on storage.objects for delete to authenticated
+    using (
+        bucket_id = 'group-chat-photos'
+        and (storage.foldername(name))[2] = (select auth.uid())::text
         and exists (
             select 1 from public.group_members m
             where m.group_id::text = (storage.foldername(name))[1]
