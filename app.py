@@ -380,17 +380,52 @@ def render_group_chat_messages(database, group_id, user_id, display_name):
                         st.image(signed_url, caption=f"{who} · {when}", width=360)
                 except Exception:
                     st.caption("A chat photo could not be displayed.")
+            if mine and st.button("🗑️ Delete", key=f"delete_group_message_{item['id']}", help="Delete this message you sent"):
+                try:
+                    database.table("group_messages").delete().eq("id", item["id"]).eq("sender_id", user_id).execute()
+                    if item.get("image_path"):
+                        try:
+                            database.storage.from_("group-chat-photos").remove([item["image_path"]])
+                        except Exception:
+                            pass
+                        st.session_state.get("chat_photo_signed_urls", {}).pop(item["image_path"], None)
+                    st.rerun()
+                except Exception:
+                    st.error("Could not delete this message. Run the updated Supabase database setup and retry.")
     except Exception:
         st.error("Chat messages could not be loaded. Check the group membership policies.")
-    with st.expander("📷 Add a photo, camera picture, or emoji"):
-        with st.form(f"chat_media_form_{group_id}"):
-            uploaded_photo = st.file_uploader("Choose a photo", type=["jpg", "jpeg", "png", "webp"], key=f"chat_upload_{group_id}")
-            camera_photo = st.camera_input("Take a photo", key=f"chat_camera_{group_id}")
-            caption_text = st.text_input("Caption (optional)", max_chars=500, key=f"chat_caption_{group_id}")
-            emoji = st.selectbox("Add an emoji", ["None", "😀", "😂", "❤️", "👍", "🎉", "🙏", "🔥", "🤔", "💡", "✅"], key=f"chat_emoji_{group_id}")
-            send_media = st.form_submit_button("Send to group", type="primary")
-        if send_media and (uploaded_photo or camera_photo or emoji != "None" or caption_text.strip()):
-            photo = camera_photo or uploaded_photo
+    epoch_key = f"chat_composer_epoch_{group_id}"
+    epoch = int(st.session_state.get(epoch_key, 0))
+    mode_key = f"chat_composer_mode_{group_id}"
+    composer_mode = st.session_state.get(mode_key, "")
+    with st.container(border=True):
+        photo_col, camera_col, emoji_col, text_col, send_col = st.columns([0.55, 0.55, 0.55, 5, 0.65])
+        if photo_col.button("🖼️", key=f"chat_attach_button_{group_id}", help="Attach a photo"):
+            st.session_state[mode_key] = "upload" if composer_mode != "upload" else ""
+            st.rerun()
+        if camera_col.button("📷", key=f"chat_camera_button_{group_id}", help="Take a photo"):
+            st.session_state[mode_key] = "camera" if composer_mode != "camera" else ""
+            st.rerun()
+        if emoji_col.button("😊", key=f"chat_emoji_button_{group_id}", help="Choose an emoji"):
+            st.session_state[mode_key] = "emoji" if composer_mode != "emoji" else ""
+            st.rerun()
+        message_key = f"chat_text_{group_id}_{epoch}"
+        message = text_col.text_input("Message", placeholder="Type a message…", key=message_key, label_visibility="collapsed", max_chars=2000)
+        send_message = send_col.button("➤", key=f"chat_send_{group_id}_{epoch}", help="Send message", type="primary", use_container_width=True)
+
+    photo = None
+    if composer_mode == "upload":
+        photo = st.file_uploader("Choose photo to attach", type=["jpg", "jpeg", "png", "webp"], key=f"chat_upload_{group_id}_{epoch}")
+    elif composer_mode == "camera":
+        photo = st.camera_input("Take a photo to attach", key=f"chat_camera_input_{group_id}_{epoch}")
+    emoji = "None"
+    if composer_mode == "emoji":
+        emoji = st.selectbox("Choose an emoji", ["None", "😀", "😂", "❤️", "👍", "🎉", "🙏", "🔥", "🤔", "💡", "✅"], key=f"chat_emoji_{group_id}_{epoch}")
+
+    if send_message:
+        if not message.strip() and not photo and emoji == "None":
+            st.warning("Type a message or choose a photo or emoji first.")
+        else:
             image_path = None
             try:
                 if photo:
@@ -398,29 +433,20 @@ def render_group_chat_messages(database, group_id, user_id, display_name):
                     image.thumbnail((1600, 1600))
                     image_buffer = BytesIO()
                     image.save(image_buffer, format="JPEG", quality=84, optimize=True)
-                    photo_bytes = image_buffer.getvalue()
-                    mime, extension = "image/jpeg", "jpg"
-                    image_path = f"{group_id}/{user_id}/{uuid4().hex}.{extension}"
+                    image_path = f"{group_id}/{user_id}/{uuid4().hex}.jpg"
                     database.storage.from_("group-chat-photos").upload(
-                        image_path, photo_bytes, {"content-type": mime, "upsert": "false"}
+                        image_path, image_buffer.getvalue(), {"content-type": "image/jpeg", "upsert": "false"}
                     )
-                media_message = " ".join(part for part in [emoji if emoji != "None" else "", caption_text.strip()] if part)
+                message_text = " ".join(part for part in [emoji if emoji != "None" else "", message.strip()] if part)
                 database.table("group_messages").insert({
                     "group_id": group_id, "sender_id": user_id, "display_name": display_name,
-                    "message": media_message, "image_path": image_path,
+                    "message": message_text, "image_path": image_path,
                 }).execute()
+                st.session_state[epoch_key] = epoch + 1
+                st.session_state[mode_key] = ""
                 st.rerun()
             except Exception:
-                st.error("Could not send this photo or emoji. Check that the latest database setup was run.")
-    message = st.chat_input("Message your group… 😊", max_chars=2000, key=f"chat_message_{group_id}")
-    if message:
-        try:
-            database.table("group_messages").insert(
-                {"group_id": group_id, "sender_id": user_id, "display_name": display_name, "message": message.strip()}
-            ).execute()
-            st.rerun()
-        except Exception:
-            st.error("Message could not be sent. Confirm that you are a member of this group.")
+                st.error("Message could not be sent. Confirm that you are a group member and the updated database setup has been run.")
 
 
 @st.fragment(run_every=8)
