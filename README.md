@@ -2,7 +2,7 @@
 
 A two-app Streamlit campus community for B.Tech students. Both apps use one Supabase database.
 
-- `app.py` — student app: one simple name/email/password entry form that signs in returning students or creates a first-time account, seven bulb-cycled color themes, pebble-style navigation, join-to-chat groups, WhatsApp-style chats, front-page campus notices, daily AI study thought, activities, calendar, AI study buddy, web search, WhatsApp links, and feedback.
+- `app.py` — student app: email-only entry with no password or confirmation email, followed by a student profile form for name, department, and semester; seven bulb-cycled color themes; pebble-style navigation; groups/chats; notices, activities, calendar, AI study buddy/search, WhatsApp links, and feedback.
 - `creator_app.py` — separate password-protected Creator Studio: seven bulb-cycled color themes, AI-assisted notice/activity/calendar drafts, poster reading and poster creation/upload, special-day highlighting, public campus links, publish/edit/delete, group administration, and anonymous page-view totals.
 - `supabase_schema.sql` — shared tables, initial department and semester groups, campus links, anonymous page-view counts, poster storage bucket, and student access policies.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
@@ -15,8 +15,8 @@ Student pages show published campus content. Creator drafts and edit controls re
 2. In the project, open **SQL Editor → New query**.
 3. Open `supabase_schema.sql`, copy its full contents, paste into the SQL Editor, and click **Run**. This creates groups for the listed departments and semesters 1–8, chats, campus posts, feedback, campus links, anonymous page-view counts, the public poster bucket, and database access policies.
    If the database already exists, run the updated SQL again. It adds missing columns/tables and refreshes policies without deleting existing posts or messages.
-4. In **Authentication → Sign In / Providers → Email**, enable email signups. To let a new student enter immediately without an email code, turn **Confirm email** off in the Email provider settings. Supabase then creates a session immediately; with confirmation enabled, students must verify first. [Supabase email confirmation settings](https://supabase.com/docs/guides/auth/general-configuration) · [Supabase Python sign-up behavior](https://supabase.com/docs/reference/python/auth-signup).
-5. With email confirmation off, Supabase does not verify that a student owns the email address. Anyone can register using an email address they type. Turn confirmation back on for a wider public launch, and configure SMTP if you want students to verify their addresses.
+4. In **Authentication → Sign In / Providers**, enable **Allow anonymous sign-ins**. The student app uses Supabase anonymous sessions; it does not send a confirmation email. The Email provider’s **Confirm email** toggle does not control this flow. [Supabase anonymous sign-ins](https://supabase.com/docs/guides/auth/auth-anonymous) · [Python anonymous sign-in](https://supabase.com/docs/reference/python/auth-signinanonymously).
+5. Students type an email, then enter their name, department, and semester. The email is only a label and is not verified. Anonymous accounts cannot be recovered after a sign-out, lost browser session, or switching devices; for a real campus launch where profiles/chat identity must persist, use verified email or another sign-in method.
 6. Find the project URL and publishable/anon key in the Supabase API key settings. Keep the service-role/secret key for the server-side Creator Studio only.
 
 ## 2. Create a public campus Google Calendar (optional)
@@ -36,7 +36,7 @@ Create your WhatsApp Community and Channel, then copy their invite/share URLs. A
 
 ## 4. Student login, page views, and notice posters
 
-- Students use the same name/email/password form each time. On the first visit the app creates their account; on later visits the same email and password sign them in. Existing accounts created with the old email-code-only flow do not have a password; the creator must help set a password for those existing accounts before students can use this password form.
+- Students enter their email to start an anonymous session, then complete a profile with name, department, and semester. No password or confirmation email is used. Because the email is not an identity check, and the anonymous account is tied to the current browser session, sign-out/session loss means the student cannot recover the same account by re-entering the email.
 - The creator dashboard counts app page openings in **App page views** and **Views today**. These are not unique-student counts: returning to the same page during one login session is counted once. The log stores only the page name and timestamp, not a student ID, email, or chat message.
 - In **Creator Studio → Manage notices & activities**, add event details, optionally upload a photo, then select **Create poster picture from these details**. You can also upload a finished poster and attach it directly. Review the preview, then save or publish. Students see the attached image with the notice/activity.
 - Poster image storage uses a public Supabase Storage bucket so student browsers can display images. Upload only artwork intended to be public. An uploaded background photo is sent to Supabase only when saving or publishing; poster reading sends the selected file to Groq only after you confirm in the app.
@@ -111,4 +111,4 @@ The Creator Studio password is shared in this starter version. Anyone who has it
 - Click the hanging bulb at top-right to cycle through seven color themes: White, Dark, Blue, Purple, Amber, Rose, and Teal. The current theme name appears below the bulb.
 - The student Home page places one pinned important notice in a box in the upper-right half, beside the date card.
 
-Before a campus-wide launch, configure college email verification, protect Creator Studio credentials, review the access policies, and try the apps with separate student accounts. Never put private information in a public calendar or AI prompt.
+Before a campus-wide launch, choose an identity method that students can recover, protect Creator Studio credentials, review the access policies, and try the apps with separate student accounts. Never put private information in a public calendar or AI prompt.
