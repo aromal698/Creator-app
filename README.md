@@ -16,8 +16,10 @@ Student pages show published campus content. Creator drafts and edit controls re
 3. Open `supabase_schema.sql`, copy its full contents, paste into the SQL Editor, and click **Run**. This creates groups for the listed departments and semesters 1–8, chats, daily alerts, a private creator inbox, page-view counts, storage buckets, and access policies.
    If the database already exists, run the updated SQL again. It adds missing columns/tables and refreshes policies without deleting existing posts or messages.
 4. In **Authentication → Sign In / Providers → Email**, enable **Allow new users to sign up**. Turn **Confirm email** off if students should start using the app immediately after creating their profile. The app does not use anonymous sign-ins.
-5. No Magic Link template is needed for this password-based flow. Students select **Create profile** to enter name, email, department, semester, and password. The next time they choose **Log in** and use the same email and password. Supabase’s supported password sign-in is documented [here](https://supabase.com/docs/reference/python/auth-signinwithpassword).
-6. Find the project URL and publishable/anon key in the Supabase API key settings. Keep the service-role/secret key for the server-side Creator Studio only.
+5. For Google login, create a **Web application** OAuth client in Google Cloud. Add the student app URL as an authorized JavaScript origin. Add both redirect URLs: `https://YOUR-APP.streamlit.app/oauth2callback` and the Supabase Google provider callback shown in Supabase's Google provider settings. Then enable Google under **Supabase → Authentication → Sign In / Providers → Google** and enter the same Google client ID and secret. Google login creates/uses a Supabase account so the database policies for chats and profiles still apply.
+6. In the student app's Streamlit Secrets, add the `[auth]` block shown below. Set `redirect_uri` to the exact `/oauth2callback` URL of the deployed student app and replace the Google values. `cookie_secret` must be a long, private, random string; never commit the real value. `expose_tokens = ["id"]` lets the server exchange the verified Google ID token for a Supabase student session.
+7. Students can select **Continue with Google**. On first use, they save their name, department, and semester once. Streamlit remembers the Google login in that browser for up to 30 days. Google ID tokens expire sooner; if one has expired, the student may need to tap **Continue with Google** again, but Google may not ask them to retype their password if that browser is still signed into Google. They can also keep using email and password. Streamlit's supported login and cookie behavior is documented [here](https://docs.streamlit.io/develop/concepts/connections/authentication).
+8. Find the project URL and publishable/anon key in the Supabase API key settings. Keep the service-role/secret key for the server-side Creator Studio only.
 
 ## 2. Create a public campus Google Calendar (optional)
 
@@ -79,6 +81,14 @@ SUPABASE_URL = "your-supabase-project-url"
 SUPABASE_ANON_KEY = "your-supabase-publishable-or-anon-key"
 GROQ_API_KEY = "your-groq-api-key"
 GROQ_MODEL = "openai/gpt-oss-20b"
+
+[auth]
+redirect_uri = "https://YOUR-APP.streamlit.app/oauth2callback"
+cookie_secret = "replace-with-your-own-long-random-secret"
+client_id = "your-google-oauth-client-id"
+client_secret = "your-google-oauth-client-secret"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+expose_tokens = ["id"]
 ```
 
 Replace all examples with your real settings and click **Deploy**. Calendar and WhatsApp URLs are entered later by the creator in Creator Studio → Campus links. Streamlit's docs show the entrypoint and secrets fields in the deploy workflow. [Deploy an app](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app).
@@ -107,7 +117,7 @@ The Creator Studio password is shared in this starter version. Anyone who has it
 
 - Students create their profile once with email, password, name, department, and semester. On later visits they choose **Log in** and use that same email and password to return to their saved profile.
 - Students get a separate seeded chat group for each department and semester (for example, CSE · Semester 3). The Study Groups page starts filtered to the student's own department and semester; students can also browse other groups or create a new group. Joining opens that group's chat.
-- The creator makes private groups in **Creator Studio → Group admin** and shares the generated invite code with selected students. The database stores only a hash of the code. Students join through **Study Groups → Join with code**; a successful join opens that group's chat. Private groups stay hidden from students who have not joined. Students can create public groups only.
+- The creator makes private groups in **Creator Studio → Group admin** and shares the generated invite code with selected students. The database stores only a hash of the code. If a code is lost, choose **Manage groups and members → Generate / replace invite code**; this invalidates the previous code but keeps current members. Students join through **Study Groups → Join with code**; a successful join opens that group's chat. Private groups stay hidden from students who have not joined. Students can create public groups only.
 - The student Home page puts the important notice and all published campus notices near the top; notices are arranged in three columns. It shows today's activities and creator-highlighted special days from the campus calendar, and generates a daily AI study thought in English and Malayalam. The AI summary only uses events the creator marked as special.
 - **Campus Calendar** shows published event details by selected date, Google Calendar (if configured), and Add to Google Calendar links.
 - **AI Study Buddy, AI Search, and Creator Studio drafting** use Groq's `openai/gpt-oss-20b`; AI Search enables the built-in browser search tool. Search results and AI answers can still be incomplete or wrong. [Groq model and browser search docs](https://console.groq.com/docs/tool-use/built-in-tools/browser-search).
