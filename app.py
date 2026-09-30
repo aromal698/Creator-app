@@ -187,6 +187,10 @@ def go_home():
     st.session_state.nav_page = "Home"
 
 
+def toggle_student_manual():
+    st.session_state.show_student_manual = not st.session_state.get("show_student_manual", False)
+
+
 def toggle_theme():
     st.session_state.theme_index = (int(st.session_state.get("theme_index", 0)) + 1) % len(THEMES)
 
@@ -573,6 +577,7 @@ def apply_theme():
     .stApp div.stButton > button,.stApp [data-testid="stFormSubmitButton"] button,.stApp [data-testid="stDownloadButton"] button,.stApp [data-testid="stLinkButton"] a {{ border-color:{theme['accent']} !important; color:{theme['accent']} !important; }}
     .stApp div.stButton > button:hover,.stApp [data-testid="stFormSubmitButton"] button:hover,.stApp [data-testid="stDownloadButton"] button:hover {{ background:{theme['soft']} !important; }}
     .stApp .st-key-theme_bulb button {{ background:#fff7d9 !important; color:#704f00 !important; border-color:#d6b66a !important; }}
+    .stApp .st-key-student_manual_button button {{ background:{theme['surface']} !important; color:{theme['accent']} !important; border:1px solid {theme['border']} !important; border-radius:11px !important; min-width:42px; min-height:42px; padding:0 .45rem; font-size:1.35rem; box-shadow:0 2px 8px #00000012; }}
     .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] {{ background:{theme['surface']} !important; border:1px solid {theme['border']} !important; border-left:4px solid transparent !important; color:{theme['text']} !important; }}
     .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; }}
     .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; border-left:4px solid {theme['accent']} !important; }}
@@ -793,14 +798,31 @@ if st.session_state.get("last_logged_view_page") != page:
         pass
     st.session_state["last_logged_view_page"] = page
 
-heading, bulb = st.columns([12, 1])
+heading, manual_cube, bulb = st.columns([11, 1, 1])
 with heading:
     st.markdown("<div class='eyebrow'>B.TECH STUDENT COMMUNITY</div>", unsafe_allow_html=True)
     st.title(page)
+with manual_cube:
+    st.button("🧊", key="student_manual_button", on_click=toggle_student_manual, help="Open the simple student manual")
 with bulb:
     theme_control()
 if page != "Home":
     st.button("← Back to home", on_click=go_home)
+
+if st.session_state.get("show_student_manual", False):
+    with st.container(border=True):
+        manual_title, manual_close = st.columns([10, 1])
+        manual_title.markdown("### 🧊 Quick guide for students")
+        manual_close.button("Close", key="close_student_manual", on_click=toggle_student_manual)
+        manual_left, manual_right = st.columns(2)
+        with manual_left:
+            st.markdown("**1. Your profile**  \nUse the left menu to update your name, department, or semester. Use **Sign out** when finished.")
+            st.markdown("**2. Join a group**  \nChoose **Study Groups**. Join a public group, or enter a private code from the creator. Joining opens the chat.")
+            st.markdown("**3. Group chat**  \nSend a message, photo, camera picture, or emoji. You can delete your own selected messages.")
+        with manual_right:
+            st.markdown("**4. Home and calendar**  \nFind campus notices, activities, today's special, and WhatsApp links on **Home**. Open **Campus Calendar** for event dates.")
+            st.markdown("**5. AI help**  \nOpen **AI Study Buddy** or **AI Search**. Pick English, Malayalam, or Manglish where the language choice is shown.")
+            st.markdown("**6. Feedback**  \nOpen **Feedback**, write your message, then choose **Send feedback**.")
 
 name = display_name.strip() or "Student"
 if daily_choice == "yellow":
