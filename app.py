@@ -54,8 +54,72 @@ def clear_login():
     for key in (
         "supabase_access_token", "supabase_refresh_token", "campus_user_id", "display_name",
         "student_email", "student_profile_complete", "profile_department", "profile_semester",
+        "google_supabase_attempted_sub",
     ):
         st.session_state.pop(key, None)
+
+
+def google_oidc_is_configured():
+    try:
+        auth_settings = st.secrets["auth"]
+        return bool(
+            auth_settings.get("redirect_uri")
+            and auth_settings.get("cookie_secret")
+            and auth_settings.get("client_id")
+            and auth_settings.get("client_secret")
+            and auth_settings.get("server_metadata_url")
+            and "id" in auth_settings.get("expose_tokens", [])
+        )
+    except Exception:
+        return False
+
+
+def restore_supabase_google_session():
+    """Exchange Streamlit's remembered Google ID token for a Supabase user session."""
+    if not google_oidc_is_configured():
+        return
+    try:
+        google_user = st.user
+        if not google_user.is_logged_in:
+            return
+        google_sub = str(google_user.get("sub", ""))
+        if not google_sub or st.session_state.get("google_supabase_attempted_sub") == google_sub:
+            return
+        if st.session_state.get("supabase_access_token") and st.session_state.get("supabase_refresh_token"):
+            return
+        st.session_state.google_supabase_attempted_sub = google_sub
+        token_expiry = google_user.get("exp")
+        if token_expiry and float(token_expiry) <= time.time():
+            st.session_state.pop("google_supabase_attempted_sub", None)
+            st.session_state.auth_notice = "Your remembered Google sign-in needs a quick refresh. Tap Continue with Google; if you are still signed in to Google, you usually will not need to type your password."
+            return
+        token_set = google_user.tokens
+        google_id_token = token_set.get("id") if token_set else None
+        if not google_id_token:
+            st.session_state.pop("google_supabase_attempted_sub", None)
+            st.session_state.auth_notice = "Google sign-in is active, but its ID token is unavailable. Add expose_tokens = ['id'] to the student app's Streamlit Secrets, then sign in again."
+            return
+        url = secret("SUPABASE_URL")
+        public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
+        if not url or not public_key:
+            st.session_state.pop("google_supabase_attempted_sub", None)
+            st.session_state.auth_notice = "Add the Supabase URL and public/anon key to the student app's Streamlit Secrets."
+            return
+        client = create_client(url, public_key)
+        id_token_credentials = {"provider": "google", "token": google_id_token}
+        google_nonce = google_user.get("nonce")
+        if google_nonce:
+            id_token_credentials["nonce"] = google_nonce
+        response = client.auth.sign_in_with_id_token(id_token_credentials)
+        if save_auth_response(response, default_name=str(google_user.get("name", "Student"))):
+            st.session_state.student_email = str(google_user.get("email", ""))
+            st.session_state.nav_page = "Home"
+        else:
+            st.session_state.pop("google_supabase_attempted_sub", None)
+            st.session_state.auth_notice = "Google was recognized, but Supabase did not return a student session. Check the Google provider setup in Supabase."
+    except Exception as auth_error:
+        st.session_state.pop("google_supabase_attempted_sub", None)
+        st.session_state.auth_notice = f"Google sign-in could not connect to Supabase: {auth_setup_help(auth_error)}"
 
 
 def save_auth_response(response, default_name=""):
@@ -181,6 +245,11 @@ def sign_out_callback():
     st.session_state.pop("active_group_id", None)
     st.session_state.pop("last_logged_view_page", None)
     st.session_state.nav_page = "Home"
+    try:
+        if st.user.is_logged_in:
+            st.logout()
+    except Exception:
+        pass
 
 
 def go_home():
@@ -636,13 +705,20 @@ def show_login():
         theme_control()
     st.markdown("<div class='eyebrow'>STUDENT ENTRY</div>", unsafe_allow_html=True)
     st.title("Welcome to CampusConnect")
-    st.write("Create a student profile with your email and password. Use the same email and password whenever you return.")
+    st.write("Continue with Google for a quick sign-in, or create a student profile with email and password.")
     auth_notice = st.session_state.pop("auth_notice", None)
     if auth_notice and "sign-in failed" not in auth_notice.lower():
         st.info(auth_notice)
     if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
         st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
         return
+    if google_oidc_is_configured():
+        st.button("Continue with Google", on_click=st.login, type="primary", use_container_width=True)
+        st.caption("Google remembers your sign-in on this browser. You may not need to type your Google password again.")
+        st.divider()
+        st.caption("Or use your email and password")
+    else:
+        st.info("To enable Google sign-in, add the [auth] settings from README.md to this student app's Secrets and enable Google in Supabase Authentication → Providers.")
     auth_choice = st.radio("Choose an option", ["Create profile", "Log in"], horizontal=True, key="student_auth_choice")
     if auth_choice == "Create profile":
         st.caption("Create your profile once with email, password, name, department, and semester. Next time, choose Log in and use the same email and password to return to this saved profile.")
@@ -682,6 +758,7 @@ def show_login():
                 st.error(st.session_state.pop("auth_notice", "Could not sign in. Try again."))
 
 apply_theme()
+restore_supabase_google_session()
 client, auth_user, auth_error = get_authenticated_client()
 if not client or not auth_user:
     if auth_error:
