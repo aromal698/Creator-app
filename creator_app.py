@@ -106,6 +106,9 @@ def theme_control():
 def creator_sign_out():
     st.session_state.creator_authenticated = False
     st.session_state.pop("creator_login_name", None)
+    st.session_state.pop("creator_private_group_code", None)
+    st.session_state.pop("creator_private_group_name", None)
+    st.session_state.pop("creator_private_group_id", None)
     st.session_state.creator_page = "Creator dashboard"
 
 
@@ -818,11 +821,12 @@ elif page == "Group admin":
         latest_private_code = st.session_state.get("creator_private_group_code")
         if latest_private_code:
             with st.container(border=True):
-                st.success(f"Private group created: {st.session_state.get('creator_private_group_name', 'Private group')}. Share this code with invited students.")
+                st.success(f"Private group: {st.session_state.get('creator_private_group_name', 'Private group')}. Share this code with invited students.")
                 st.code(latest_private_code, language=None)
                 if st.button("Hide invite code", key="hide_creator_private_code"):
                     st.session_state.pop("creator_private_group_code", None)
                     st.session_state.pop("creator_private_group_name", None)
+                    st.session_state.pop("creator_private_group_id", None)
                     st.rerun()
         st.caption("Create public groups for all students, or private groups that students can enter only with a code you share.")
         name = st.text_input("Group name", key="admin_group_name")
@@ -870,6 +874,7 @@ elif page == "Group admin":
                         }).execute()
                         st.session_state.creator_private_group_code = invite_code
                         st.session_state.creator_private_group_name = name.strip()
+                        st.session_state.creator_private_group_id = str(group_id)
                         st.rerun()
                     st.success("Public group created and visible to students.")
                 except Exception as exc:
@@ -894,6 +899,29 @@ elif page == "Group admin":
                 format_func=lambda value: f"{groups_by_id[value]['name']} · {'Active' if groups_by_id[value]['is_active'] else 'Archived'}",
             )
             group = groups_by_id[group_id]
+            if group.get("is_private"):
+                st.subheader("🔒 Private group invite code")
+                if st.session_state.get("creator_private_group_id") == str(group_id):
+                    st.code(st.session_state.get("creator_private_group_code", ""), language=None)
+                    st.caption("This code is visible only in your Creator Studio session. Copy it and send it to invited students.")
+                else:
+                    st.caption("Invite codes are stored securely as hashes, so an old code cannot be displayed again. Generate a replacement to share with new students; this will invalidate the previous code.")
+                if st.button("Generate / replace invite code", key=f"replace_private_code_{group_id}"):
+                    new_code = "".join(secure_random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(10))
+                    try:
+                        db.table("private_group_invites").upsert(
+                            {
+                                "group_id": group_id,
+                                "code_hash": hashlib.sha256(new_code.encode("utf-8")).hexdigest(),
+                            },
+                            on_conflict="group_id",
+                        ).execute()
+                        st.session_state.creator_private_group_code = new_code
+                        st.session_state.creator_private_group_name = group["name"]
+                        st.session_state.creator_private_group_id = str(group_id)
+                        st.rerun()
+                    except Exception:
+                        st.error("Could not update the invite code. Run the latest Supabase setup and try again.")
             g_name = st.text_input("Group name", value=group["name"], key=f"group_name_{group_id}")
             dept_options = DEPARTMENTS
             current_dept = group["department"] if group["department"] in dept_options else "Cross-department"
