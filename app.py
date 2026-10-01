@@ -154,7 +154,10 @@ def student_signup_callback(name, email, password, department, semester):
             return
         st.session_state.auth_notice = "Your account was created. Check your inbox for Supabase's email confirmation, then log in. To skip signup confirmation for new accounts, turn off Confirm email in Supabase Email provider settings before students create their profiles."
     except Exception as auth_error:
-        st.session_state.auth_notice = auth_setup_help(auth_error)
+        auth_message = auth_setup_help(auth_error)
+        st.session_state.auth_notice = auth_message
+        if "already exists for this email" in auth_message.lower():
+            st.session_state.auth_switch_to_login = True
 
 
 def student_login_callback(email, password):
@@ -643,6 +646,9 @@ def show_login():
     if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
         st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
         return
+    if st.session_state.pop("auth_switch_to_login", False):
+        # Set this before the radio widget is created so Streamlit can switch tabs cleanly.
+        st.session_state.student_auth_choice = "Log in"
     auth_choice = st.radio("Choose an option", ["Log in", "Create profile"], horizontal=True, key="student_auth_choice")
     if auth_choice == "Create profile":
         st.caption("Create your profile once with email, password, name, department, and semester. Next time, choose Log in and use the same email and password to return to this saved profile.")
