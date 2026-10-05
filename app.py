@@ -307,7 +307,7 @@ def student_ai_completion(messages):
     raise RuntimeError("Choose Groq or Cloudflare Workers AI in the sidebar.")
 
 
-def render_ai_markdown(answer):
+def render_ai_markdown(answer, display=True):
     """Turn common AI LaTeX fragments into readable plain-text math before display."""
     text = str(answer or "")
     # Convert TeX fractions, units, symbols and powers to text that stays
@@ -339,7 +339,28 @@ def render_ai_markdown(answer):
     text = text.replace(r"\(", "").replace(r"\)", "")
     text = text.replace(r"\[", "").replace(r"\]", "")
     text = text.replace("$$", "").replace("$", "")
-    st.markdown(text)
+    if display:
+        st.markdown(text)
+    return text
+
+
+def add_pdf_print_option(title, question, answer):
+    """Offer a browser print dialog where students can save the answer as a PDF."""
+    safe_title = escape(str(title or "CampusConnect AI answer"))
+    safe_question = escape(str(question or ""))
+    safe_answer = escape(render_ai_markdown(answer, display=False)).replace("\n", "<br>")
+    document = f"""<!doctype html><html><head><meta charset="utf-8"><title>{safe_title}</title>
+    <style>
+    body{{font:16px/1.65 Arial,sans-serif;color:#172b27;margin:0}}
+    button{{border:1px solid #176b5b;border-radius:10px;background:#e3f1e8;color:#14584c;padding:9px 14px;font-size:14px;font-weight:600;cursor:pointer}}
+    #paper{{display:none}}
+    @media print{{button{{display:none}}#paper{{display:block}}body{{margin:18mm}}h1{{font-size:20pt}}h2{{font-size:13pt;margin-top:20px}}}}
+    </style></head><body>
+    <button onclick="window.print()">📄 Print / Save as PDF</button>
+    <main id="paper"><h1>{safe_title}</h1><h2>Question</h2><p>{safe_question}</p>
+    <h2>Answer</h2><p>{safe_answer}</p><p>CampusConnect · AI-generated study aid. Verify important facts with your course materials.</p></main>
+    </body></html>"""
+    components.html(document, height=55, scrolling=False)
 
 
 def show_post(post):
@@ -1239,6 +1260,7 @@ elif page == "AI Search":
                 st.markdown(f"- [{source['title']}]({source['url']})")
         else:
             st.caption("This answer has no live sources. Verify current facts on official websites.")
+        add_pdf_print_option("CampusConnect AI Search", result["question"], result["answer"])
 
 elif page == "WhatsApp":
     st.info("WhatsApp Community, Channel, and app-sharing links are on the Home page.")
@@ -1256,6 +1278,18 @@ elif page == "AI Study Buddy":
                 render_ai_markdown(message["content"])
             else:
                 st.markdown(message["content"])
+    latest_answer_index = next(
+        (index for index in range(len(chat) - 1, -1, -1) if chat[index]["role"] == "assistant"),
+        None,
+    )
+    if latest_answer_index is not None:
+        latest_answer = chat[latest_answer_index]["content"]
+        latest_question = next(
+            (chat[index]["content"] for index in range(latest_answer_index - 1, -1, -1) if chat[index]["role"] == "user"),
+            "",
+        )
+        if latest_question and not latest_answer.startswith(("AI is not configured", "AI request failed")):
+            add_pdf_print_option("CampusConnect Study Buddy", latest_question, latest_answer)
     question = st.chat_input("Ask something you are learning…")
     if question:
         chat.append({"role": "user", "content": question})
