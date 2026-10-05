@@ -21,6 +21,7 @@ from supabase import create_client
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other"]
 SEMESTERS = list(range(1, 9))
 NAV_PAGES = ["Home", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "Feedback"]
+FREE_CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
 NAV_PAGE_ICONS = {
     "Home": "⌂", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
     "Campus Calendar": "📅", "Campus Activities": "🎪", "Notices": "📌",
@@ -53,7 +54,7 @@ def secret(name, default=None):
 def clear_login():
     for key in (
         "supabase_access_token", "supabase_refresh_token", "campus_user_id", "display_name",
-        "student_email", "student_profile_complete", "profile_department", "profile_semester",
+        "student_email", "student_registration_number", "student_profile_complete", "profile_department", "profile_semester",
     ):
         st.session_state.pop(key, None)
 
@@ -83,7 +84,19 @@ def get_authenticated_client():
     access = st.session_state.get("supabase_access_token")
     refresh = st.session_state.get("supabase_refresh_token")
     if not access or not refresh:
-        return client, None, None
+        # Give students a direct-entry experience without exposing an email/password
+        # screen. Supabase still issues a private user ID so the existing RLS rules
+        # continue to protect group chats and student actions.
+        try:
+            response = client.auth.sign_in_anonymously()
+            if save_auth_response(response):
+                return get_authenticated_client()
+            return client, None, "Supabase did not create a student session. Enable anonymous sign-ins in Supabase Auth."
+        except Exception as auth_error:
+            return client, None, (
+                "CampusConnect needs anonymous sign-ins enabled in Supabase → Authentication → Sign In / Providers. "
+                f"Details: {str(auth_error)[:250]}"
+            )
     try:
         client.auth.set_session(access, refresh)
         user_response = client.auth.get_user()
@@ -96,94 +109,7 @@ def get_authenticated_client():
         return client, user, None
     except Exception:
         clear_login()
-        return client, None, "Your session expired. Please sign in again."
-
-
-def auth_setup_help(error):
-    """Turn common Supabase auth failures into safe, actionable hints; never echo secrets."""
-    message = str(error).lower()
-    if any(term in message for term in ("invalid login credentials", "invalid credentials", "email or password is incorrect")):
-        return "Email or password is incorrect. If this is your first visit, choose Create profile first. Otherwise, check that you are using the same email and password you registered with."
-    if any(term in message for term in ("email not confirmed", "email_not_confirmed", "email is not confirmed")):
-        return "This account is waiting for email confirmation. Turn off Authentication → Sign In / Providers → Email → Confirm email for new accounts. This already-created account may still need its existing confirmation email or help from the project owner before it can log in."
-    if any(term in message for term in ("user already registered", "already been registered", "already registered")):
-        return "An account already exists for this email. Choose Log in and use its existing password. If you never set a password, reset that account in Supabase Auth or use another email."
-    if any(term in message for term in ("password should be at least", "password is too short", "weak_password")):
-        return "Choose a longer password and try creating the profile again. CampusConnect asks for at least 8 characters."
-    if any(term in message for term in ("invalid api key", "invalid api_key", "invalid jwt", "unauthorized", "401")):
-        return (
-            "Supabase rejected the student app key. In this Streamlit app's Secrets, check SUPABASE_URL "
-            "and SUPABASE_ANON_KEY (or SUPABASE_PUBLISHABLE_KEY). Use the public/anon key, not the service-role key."
-        )
-    if any(term in message for term in ("connecterror", "connecttimeout", "readtimeout", "timed out", "network", "name or service not known")):
-        return "CampusConnect could not connect to Supabase. Check your internet, project URL, and Supabase project status, then retry."
-    if any(term in message for term in ("signups not allowed", "signup is disabled", "sign up is disabled", "user signups are disabled")):
-        return "New student profiles are disabled. In Supabase, open Authentication → Sign In / Providers → Email and enable new user sign-ups."
-    if any(term in message for term in ("rate limit", "email rate limit")):
-        return "Supabase temporarily limited email requests. Wait a little before trying again."
-    return (
-        "Supabase returned an unexpected authentication error. Check this app's SUPABASE_URL and public/anon key, "
-        "then open Supabase → Authentication logs to see the matching error. Never paste a service-role key into the student app."
-    )
-
-
-def student_signup_callback(name, email, password, department, semester):
-    url = secret("SUPABASE_URL")
-    public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
-    if not url or not public_key:
-        st.session_state.auth_notice = "Student sign-in is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to this app's Streamlit Secrets."
-        return
-    try:
-        client = create_client(url, public_key)
-        response = client.auth.sign_up({
-            "email": email.strip(),
-            "password": password,
-            "options": {"data": {
-                "display_name": name.strip(),
-                "college_email": email.strip(),
-                "department": department,
-                "semester": semester,
-            }},
-        })
-        if save_auth_response(response):
-            st.session_state.student_email = email.strip()
-            st.session_state.profile_department = department
-            st.session_state.profile_semester = semester
-            st.session_state.nav_page = "Home"
-            st.session_state.auth_notice = "Your profile is saved. Next time, choose Log in and use this same email and password. Your name, department, and semester stay with this account."
-            return
-        st.session_state.auth_notice = "Your account was created. Check your inbox for Supabase's email confirmation, then log in. To skip signup confirmation for new accounts, turn off Confirm email in Supabase Email provider settings before students create their profiles."
-    except Exception as auth_error:
-        auth_message = auth_setup_help(auth_error)
-        st.session_state.auth_notice = auth_message
-        if "already exists for this email" in auth_message.lower():
-            st.session_state.auth_switch_to_login = True
-
-
-def student_login_callback(email, password):
-    url = secret("SUPABASE_URL")
-    public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
-    if not url or not public_key:
-        st.session_state.auth_notice = "Student sign-in is not configured. Add SUPABASE_URL and the public Supabase key to Streamlit Secrets."
-        return
-    try:
-        client = create_client(url, public_key)
-        response = client.auth.sign_in_with_password({"email": email.strip(), "password": password})
-        if save_auth_response(response):
-            st.session_state.student_email = email.strip()
-            st.session_state.nav_page = "Home"
-            st.session_state.auth_notice = "You are signed in."
-            return
-        st.session_state.auth_notice = "Supabase did not finish sign-in. Check your details and try again."
-    except Exception as auth_error:
-        st.session_state.auth_notice = auth_setup_help(auth_error)
-
-
-def sign_out_callback():
-    clear_login()
-    st.session_state.pop("active_group_id", None)
-    st.session_state.pop("last_logged_view_page", None)
-    st.session_state.nav_page = "Home"
+        return client, None, "Your temporary student session expired. Refresh the page to start a new session; you may need to enter your profile again."
 
 
 def go_home():
@@ -222,25 +148,32 @@ def join_group_callback(group_id):
         go_to_chat(group_id)
 
 
-def groq_completion(messages, use_browser_search=False):
-    """Call Groq's free-tier API; web search is enabled only for AI Search."""
-    api_key = str(secret("GROQ_API_KEY", "")).strip()
+def gemini_completion(messages):
+    """Call Gemini using the REST API; API keys stay in server-side Streamlit Secrets."""
+    api_key = str(secret("GEMINI_API_KEY", "")).strip()
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY is missing from this app's Streamlit Secrets.")
-
-    payload = {
-        "model": secret("GROQ_MODEL", "openai/gpt-oss-20b"),
-        "messages": messages,
-        "max_completion_tokens": 1400,
-        "reasoning_effort": "low",
-    }
-    if use_browser_search:
-        payload["tools"] = [{"type": "browser_search"}]
-        payload["tool_choice"] = "required"
-
+        raise RuntimeError("Gemini is not configured in this app's Streamlit Secrets.")
+    model = str(secret("GEMINI_MODEL", "gemini-3.5-flash-lite")).strip()
+    system_text = "\n\n".join(
+        str(item.get("content", "")) for item in messages if item.get("role") == "system"
+    )
+    contents = []
+    for item in messages:
+        role = item.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        contents.append({
+            "role": "model" if role == "assistant" else "user",
+            "parts": [{"text": str(item.get("content", ""))}],
+        })
+    if not contents:
+        raise ValueError("Add a question before asking Gemini.")
+    payload = {"contents": contents, "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1400}}
+    if system_text:
+        payload["systemInstruction"] = {"parts": [{"text": system_text}]}
     response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
         json=payload,
         timeout=90,
     )
@@ -251,20 +184,82 @@ def groq_completion(messages, use_browser_search=False):
     if not response.ok:
         error = result.get("error", {}) if isinstance(result, dict) else {}
         message = error.get("message", response.text[:400]) if isinstance(error, dict) else str(error)
-        raise RuntimeError(f"Groq API returned HTTP {response.status_code}: {message}")
-
-    message = result["choices"][0]["message"]
-    answer = message.get("content") or "I couldn't create an answer. Try a more specific question."
+        raise RuntimeError(f"Gemini API returned HTTP {response.status_code}: {message}")
+    candidate = (result.get("candidates") or [{}])[0]
+    answer = "".join(
+        part.get("text", "") for part in candidate.get("content", {}).get("parts", [])
+        if isinstance(part, dict)
+    ).strip()
+    if not answer:
+        raise RuntimeError("Gemini did not return text. Try a different question.")
+    grounding = candidate.get("groundingMetadata", {}) or {}
     sources = []
-    for tool in message.get("executed_tools") or []:
-        search_results = tool.get("search_results") or {}
-        rows = search_results.get("results", []) if isinstance(search_results, dict) else search_results
-        if isinstance(rows, list):
-            for row in rows:
-                if isinstance(row, dict) and row.get("url"):
-                    sources.append({"title": row.get("title") or "Web source", "url": row["url"]})
+    for chunk in grounding.get("groundingChunks", []) or []:
+        web_source = chunk.get("web", {}) if isinstance(chunk, dict) else {}
+        if web_source.get("uri"):
+            sources.append({"title": web_source.get("title") or "Web source", "url": web_source["uri"]})
     unique_sources = {source["url"]: source for source in sources}
     return answer, list(unique_sources.values())
+
+
+def cloudflare_completion(messages):
+    """Free-tier Workers AI fallback. It never routes to third-party paid providers."""
+    account_id = str(secret("CLOUDFLARE_ACCOUNT_ID", "")).strip()
+    api_token = str(secret("CLOUDFLARE_API_TOKEN", "")).strip()
+    if not account_id or not api_token:
+        raise RuntimeError("Cloudflare Workers AI is not configured in Streamlit Secrets.")
+    model = str(secret("CLOUDFLARE_MODEL", FREE_CLOUDFLARE_MODEL)).strip()
+    if model != FREE_CLOUDFLARE_MODEL:
+        raise RuntimeError(f"Free-only mode allows only {FREE_CLOUDFLARE_MODEL} on Workers Free.")
+    endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{quote(model, safe='@/-')}"
+    response = requests.post(
+        endpoint,
+        headers={"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"},
+        json={"messages": messages, "max_tokens": 1400, "temperature": 0.3},
+        timeout=90,
+    )
+    try:
+        result = response.json()
+    except ValueError:
+        result = {}
+    if not response.ok or result.get("success") is False:
+        errors = result.get("errors", []) if isinstance(result, dict) else []
+        detail = errors[0].get("message", "Request failed") if errors and isinstance(errors[0], dict) else response.text[:350]
+        raise RuntimeError(f"Cloudflare Workers AI returned HTTP {response.status_code}: {detail}")
+    output = result.get("result", {}) if isinstance(result, dict) else {}
+    answer = output.get("response", "") if isinstance(output, dict) else ""
+    if not answer and isinstance(output, dict):
+        choices = output.get("choices", [])
+        if choices:
+            answer = (choices[0].get("message") or {}).get("content", "")
+    answer = str(answer or "").strip()
+    if not answer:
+        raise RuntimeError("Cloudflare Workers AI returned no text.")
+    return answer
+
+
+def any_free_ai_configured():
+    return bool(secret("GEMINI_API_KEY") or (secret("CLOUDFLARE_ACCOUNT_ID") and secret("CLOUDFLARE_API_TOKEN")))
+
+
+def student_ai_completion(messages):
+    """Try free Gemini first, then free-tier Cloudflare Workers AI; no paid fallback."""
+    failures = []
+    if str(secret("GEMINI_API_KEY", "")).strip():
+        try:
+            answer, sources = gemini_completion(messages)
+            return answer, sources, "Gemini"
+        except Exception as exc:
+            failures.append(f"Gemini: {str(exc)[:250]}")
+    if str(secret("CLOUDFLARE_ACCOUNT_ID", "")).strip() and str(secret("CLOUDFLARE_API_TOKEN", "")).strip():
+        try:
+            answer = cloudflare_completion(messages)
+            return answer, [], "Cloudflare Workers AI · Gemma 4"
+        except Exception as exc:
+            failures.append(f"Cloudflare: {str(exc)[:250]}")
+    if failures:
+        raise RuntimeError("Both configured free AI services failed. " + " | ".join(failures))
+    raise RuntimeError("Add Gemini or Cloudflare Workers AI credentials to the student app's Streamlit Secrets.")
 
 
 def render_ai_markdown(answer):
@@ -338,31 +333,10 @@ def private_group_code_hash(code):
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def groq_browser_search(question):
-    """Answer a question using Groq's GPT-OSS model and built-in browser search."""
-    return groq_completion(
-        [
-            {
-                "role": "system",
-                "content": (
-                    "You are CampusConnect's research helper. Use the browser search tool, answer clearly, "
-                    "cite sources in your response, note uncertainty, and never claim certainty beyond sources. "
-                    "Never use LaTeX markup, dollar-sign math delimiters, or backslash commands. Write equations as plain text using readable symbols and units, "
-                    "for example: p + (1/2) × ρ × v² + ρ × g × z = constant; explain each symbol. "
-                    "After each important equation, explain in plain words what it means and define every symbol. "
-                    "Use ordinary numbered citations like [1] only; never expose internal reference markers such as [1†L8-L11]."
-                ),
-            },
-            {"role": "user", "content": question},
-        ],
-        use_browser_search=True,
-    )
-
-
 @st.cache_data(ttl=86400, show_spinner=False)
 def campus_quote_of_the_day(day_key):
     """Create original daily campus thoughts in English and Malayalam."""
-    answer, _ = groq_completion(
+    answer, _, _ = student_ai_completion(
         [
             {
                 "role": "system",
@@ -383,7 +357,7 @@ def campus_calendar_special_summary(day_key, calendar_items):
     """Summarize creator-highlighted special items using only today's campus calendar data."""
     if not calendar_items:
         return ""
-    answer, _ = groq_completion(
+    answer, _, _ = student_ai_completion(
         [
             {
                 "role": "system",
@@ -633,66 +607,12 @@ def apply_theme():
     )
 
 
-def show_login():
-    bulb_space, bulb_column = st.columns([12, 1])
-    with bulb_column:
-        theme_control()
-    st.markdown("<div class='eyebrow'>STUDENT ENTRY</div>", unsafe_allow_html=True)
-    st.title("Welcome to CampusConnect")
-    st.write("Create a student profile with your email and password. Use the same details whenever you return.")
-    auth_notice = st.session_state.pop("auth_notice", None)
-    if auth_notice and "sign-in failed" not in auth_notice.lower():
-        st.info(auth_notice)
-    if not secret("SUPABASE_URL") or not (secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")):
-        st.error("Student sign-in is not configured yet. Add the Supabase URL and publishable/anon key in Streamlit Secrets after setting up the database.")
-        return
-    if st.session_state.pop("auth_switch_to_login", False):
-        # Set this before the radio widget is created so Streamlit can switch tabs cleanly.
-        st.session_state.student_auth_choice = "Log in"
-    auth_choice = st.radio("Choose an option", ["Log in", "Create profile"], horizontal=True, key="student_auth_choice")
-    if auth_choice == "Create profile":
-        st.caption("Create your profile once with email, password, name, department, and semester. Next time, choose Log in and use the same email and password to return to this saved profile.")
-        with st.form("student_create_account"):
-            new_name = st.text_input("Name")
-            new_email = st.text_input("Email address")
-            new_department = st.selectbox("Department", DEPARTMENTS)
-            new_semester = st.selectbox("Semester", SEMESTERS)
-            new_password = st.text_input("Create password", type="password")
-            confirm_password = st.text_input("Confirm password", type="password")
-            create_submitted = st.form_submit_button("Create student profile", type="primary", use_container_width=True)
-        if create_submitted:
-            if not new_name.strip() or "@" not in new_email or "." not in new_email.rsplit("@", 1)[-1]:
-                st.warning("Enter your name and a valid email address.")
-            elif len(new_password) < 8:
-                st.warning("Choose a password with at least 8 characters.")
-            elif new_password != confirm_password:
-                st.warning("The passwords do not match.")
-            else:
-                student_signup_callback(new_name, new_email, new_password, new_department, new_semester)
-                st.rerun()
-    else:
-        st.caption("Use the same email address and password you chose when creating your profile.")
-        with st.form("student_login_form"):
-            email = st.text_input("Email address", key="student_login_email")
-            password = st.text_input("Password", type="password", key="student_login_password")
-            login_submitted = st.form_submit_button("Log in", type="primary", use_container_width=True)
-        if login_submitted:
-            if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
-                st.warning("Enter a valid email address.")
-            elif not password:
-                st.warning("Enter your password.")
-            else:
-                student_login_callback(email, password)
-                if st.session_state.get("campus_user_id"):
-                    st.rerun()
-                st.error(st.session_state.pop("auth_notice", "Could not sign in. Try again."))
-
 apply_theme()
 client, auth_user, auth_error = get_authenticated_client()
 if not client or not auth_user:
     if auth_error:
-        st.warning(auth_error)
-    show_login()
+        st.error(auth_error)
+        st.info("Ask the app owner to enable Supabase anonymous sign-ins. No email confirmation or student password is used on this entry screen.")
     st.stop()
 
 try:
@@ -711,40 +631,15 @@ def campus_setting(key, legacy_secret):
     return str(secret(legacy_secret, "")).strip()
 
 user_metadata = getattr(auth_user, "user_metadata", {}) or {}
-st.session_state.setdefault("student_email", user_metadata.get("college_email", ""))
-profile_ready = bool(user_metadata.get("display_name") and user_metadata.get("department") and user_metadata.get("semester"))
-if not profile_ready:
-    st.markdown("<div class='eyebrow'>ONE-TIME STUDENT PROFILE</div>", unsafe_allow_html=True)
-    st.title("Tell us about yourself")
-    st.caption(f"Signed-in email: {st.session_state.get('student_email', '')}")
-    st.info("After saving your name, department, and semester, you can join study groups and chats.")
-    with st.form("student_profile_setup"):
-        profile_name = st.text_input("Your name", key="setup_display_name")
-        profile_department = st.selectbox("Department", DEPARTMENTS, key="setup_department")
-        profile_semester = st.selectbox("Semester", SEMESTERS, key="setup_semester")
-        profile_submitted = st.form_submit_button("Save profile and enter", type="primary", use_container_width=True)
-    if profile_submitted:
-        if not profile_name.strip():
-            st.warning("Enter your name to continue.")
-        else:
-            try:
-                client.auth.update_user({
-                    "data": {
-                        "display_name": profile_name.strip(),
-                        "college_email": st.session_state.get("student_email", ""),
-                        "department": profile_department,
-                        "semester": profile_semester,
-                    }
-                })
-                st.session_state.display_name = profile_name.strip()
-                st.session_state.profile_department = profile_department
-                st.session_state.profile_semester = profile_semester
-                st.rerun()
-            except Exception:
-                st.error("Could not save your profile. Please try again.")
-    st.stop()
+st.session_state.setdefault("student_registration_number", user_metadata.get("registration_number", ""))
+profile_ready = bool(
+    user_metadata.get("registration_number")
+    and user_metadata.get("display_name")
+    and user_metadata.get("department")
+    and user_metadata.get("semester")
+)
 
-st.session_state.setdefault("display_name", user_metadata.get("display_name", "Student"))
+st.session_state.setdefault("display_name", user_metadata.get("display_name", ""))
 st.session_state.setdefault("profile_department", user_metadata.get("department", DEPARTMENTS[0]))
 st.session_state.setdefault("profile_semester", user_metadata.get("semester", SEMESTERS[0]))
 if st.session_state.get("profile_department") not in DEPARTMENTS:
@@ -779,9 +674,62 @@ with st.sidebar:
     )
     st.markdown("# 🎓 CampusConnect")
     st.caption("One campus. Every department.")
-    display_name = st.text_input("Display name", key="display_name")
-    department = st.selectbox("Department", DEPARTMENTS, key="profile_department")
-    semester = st.selectbox("Semester", SEMESTERS, key="profile_semester")
+    if not profile_ready:
+        st.caption("You're already in the student dashboard. Save these details to join group chats.")
+        with st.form("student_profile_setup"):
+            profile_registration_number = st.text_input(
+                "Registration number", key="setup_registration_number", placeholder="Example: 24CSE001"
+            )
+            profile_name = st.text_input("Your name", key="setup_display_name")
+            profile_department = st.selectbox("Department", DEPARTMENTS, key="setup_department")
+            profile_semester = st.selectbox("Class / semester", SEMESTERS, key="setup_semester")
+            profile_submitted = st.form_submit_button("Save my profile", type="primary", use_container_width=True)
+        if profile_submitted:
+            if not profile_registration_number.strip() or not profile_name.strip():
+                st.warning("Enter your registration number and name.")
+            else:
+                try:
+                    client.auth.update_user({"data": {
+                        "registration_number": profile_registration_number.strip().upper(),
+                        "display_name": profile_name.strip(),
+                        "department": profile_department,
+                        "semester": profile_semester,
+                    }})
+                    st.session_state.student_registration_number = profile_registration_number.strip().upper()
+                    st.session_state.display_name = profile_name.strip()
+                    st.session_state.profile_department = profile_department
+                    st.session_state.profile_semester = profile_semester
+                    st.rerun()
+                except Exception as profile_error:
+                    st.error(f"Could not save your profile: {str(profile_error)[:250]}")
+        display_name = st.session_state.get("display_name", "")
+        department = st.session_state.get("profile_department", DEPARTMENTS[0])
+        semester = st.session_state.get("profile_semester", SEMESTERS[0])
+    else:
+        st.caption(f"Reg. no. · {st.session_state.student_registration_number}")
+        with st.form("student_profile_edit"):
+            registration_number = st.text_input("Registration number", key="student_registration_number")
+            display_name = st.text_input("Your name", key="display_name")
+            department = st.selectbox("Department", DEPARTMENTS, key="profile_department")
+            semester = st.selectbox("Class / semester", SEMESTERS, key="profile_semester")
+            save_profile = st.form_submit_button("Save profile changes", use_container_width=True)
+        if save_profile:
+            if not registration_number.strip() or not display_name.strip():
+                st.warning("Enter your registration number and name.")
+            else:
+                try:
+                    client.auth.update_user({"data": {
+                        "registration_number": registration_number.strip().upper(),
+                        "display_name": display_name.strip(),
+                        "department": department,
+                        "semester": semester,
+                    }})
+                    st.session_state.student_registration_number = registration_number.strip().upper()
+                    st.session_state.display_name = display_name.strip()
+                    st.success("Your profile has been saved.")
+                    st.rerun()
+                except Exception as profile_error:
+                    st.error(f"Could not save your profile: {str(profile_error)[:250]}")
     st.caption("Notices and activities are published by campus creators.")
     st.divider()
     page = st.radio(
@@ -791,8 +739,8 @@ with st.sidebar:
         key="nav_page",
         label_visibility="collapsed",
     )
-    st.caption(st.session_state.get("student_email") or "Email-only student session")
-    st.button("Sign out", on_click=sign_out_callback)
+    if profile_ready:
+        st.caption("Student profile saved on this device")
 
 # Store one anonymous view each time a signed-in student opens a different page.
 # No student ID, email, or message is sent to this aggregate analytics table.
@@ -804,14 +752,45 @@ if st.session_state.get("last_logged_view_page") != page:
         pass
     st.session_state["last_logged_view_page"] = page
 
-heading, manual_cube, bulb = st.columns([11, 1, 1])
+heading, alert_area, manual_cube, bulb = st.columns([7, 4.5, 1, 1])
 with heading:
     st.markdown("<div class='eyebrow'>B.TECH STUDENT COMMUNITY</div>", unsafe_allow_html=True)
     st.title(page)
+with alert_area:
+    with st.container(border=True):
+        st.markdown("**🎨 Today's alert**")
+        if not daily_choice:
+            red_col, yellow_col, green_col = st.columns(3)
+            clicked_choice = None
+            if red_col.button("🔴", key="daily_alert_red", help="Choose red to open a private chat with the campus creator.", use_container_width=True):
+                clicked_choice = "red"
+            if yellow_col.button("🟡", key="daily_alert_yellow", help="Choose yellow to see snow fall today.", use_container_width=True):
+                clicked_choice = "yellow"
+            if green_col.button("🟢", key="daily_alert_green", help="Choose green to earn a ₹5 in-app reward credit.", use_container_width=True):
+                clicked_choice = "green"
+            if clicked_choice:
+                try:
+                    client.table("student_daily_choices").insert({
+                        "user_id": uid, "choice_date": today_iso, "choice": clicked_choice,
+                    }).execute()
+                    if clicked_choice == "red":
+                        st.session_state._pending_nav_page = "Chat with Creator"
+                    st.rerun()
+                except Exception:
+                    st.error("Your daily choice could not be saved. Please ask the creator to run the updated database setup.")
+            st.caption("Choose one per day. Green adds in-app credit, not cash.")
+        else:
+            choice_labels = {"red": "🔴 Private creator chat", "yellow": "🟡 Snowfall", "green": "🟢 ₹5 reward credit"}
+            st.success(f"Today's choice: {choice_labels.get(daily_choice, daily_choice)}")
+            st.caption(f"In-app reward balance: ₹{profile_green_total * 5}")
+            if daily_choice == "red" and st.button("Open private creator chat", key="open_creator_chat"):
+                st.session_state._pending_nav_page = "Chat with Creator"
+                st.rerun()
 with manual_cube:
     st.button("🧊", key="student_manual_button", on_click=toggle_student_manual, help="Open the simple student manual")
 with bulb:
     theme_control()
+
 if page != "Home":
     st.button("← Back to home", on_click=go_home)
 
@@ -822,7 +801,7 @@ if st.session_state.get("show_student_manual", False):
         manual_close.button("Close", key="close_student_manual", on_click=toggle_student_manual)
         manual_left, manual_right = st.columns(2)
         with manual_left:
-            st.markdown("**1. Your profile**  \nUse the left menu to update your name, department, or semester. Use **Sign out** when finished.")
+            st.markdown("**1. Your profile**  \nEnter your registration number, name, department, and semester in the left panel, then choose **Save my profile**. Use **Save profile changes** later if your details change.")
             st.markdown("**2. Join a group**  \nChoose **Study Groups**. Join a public group, or enter a private code from the creator. Joining opens the chat.")
             st.markdown("**3. Group chat**  \nSend a message, photo, camera picture, or emoji. You can delete your own selected messages.")
         with manual_right:
@@ -1146,51 +1125,66 @@ elif page == "Campus Calendar":
         st.info("The campus creator can add the public Google Calendar embed link in Creator Studio → Campus links. Creator-published events are listed above.")
 
 elif page == "AI Search":
-    st.caption("Ask a question that needs current web information. Free-tier Groq AI searches the web and provides sources when available.")
+    st.caption("Ask a free AI a question and get a clear answer in your chosen language.")
+    st.info("Free-only mode uses Gemini or Cloudflare Workers AI's built-in knowledge. It does not search the live web, so check current facts and sources yourself.")
     st.info("AI answers can still be wrong or out of date. Verify important academic, medical, legal, or safety information with an official source.")
     response_language = st.selectbox(
         "Answer language", ["English", "Malayalam", "Manglish (Malayalam in English letters)"], key="search_answer_language"
     )
-    st.warning("Don't enter personal, sensitive, or confidential information. Free-tier requests are subject to usage limits.")
+    st.warning("Don't enter personal, sensitive, or confidential information. Both free AI services have daily usage limits.")
     with st.form("ai_search_form"):
         search_question = st.text_input("What do you want to find?", placeholder="e.g. Explain recent advances in battery recycling")
-        search_submit = st.form_submit_button("🔎 Search with free AI", type="primary")
+        search_submit = st.form_submit_button("🔎 Search with AI", type="primary")
     if search_submit:
         if not search_question.strip():
             st.warning("Enter a question to search.")
-        elif not secret("GROQ_API_KEY"):
-            st.error("Free AI is not configured. Add GROQ_API_KEY to the student app's Streamlit Secrets.")
+        elif not any_free_ai_configured():
+            st.error("AI is not configured. Add Gemini or Cloudflare Workers AI credentials to the student app's Streamlit Secrets.")
         else:
-            with st.spinner("Searching the web and preparing an answer…"):
+            with st.spinner("Free AI is preparing an answer…"):
                 try:
                     language_instruction = {
                         "English": "Answer in clear, simple English.",
                         "Malayalam": "Answer in natural Malayalam using Malayalam script. Keep equations and standard technical terms readable, and explain each technical term in Malayalam.",
                         "Manglish (Malayalam in English letters)": "Answer in Manglish: speak Malayalam, but write it using English/Latin letters. Do not switch to Malayalam script. Keep equations readable and explain technical terms simply.",
                     }[response_language]
-                    answer, sources = groq_browser_search(f"{language_instruction}\n\nQuestion: {search_question.strip()}")
-                    st.session_state.ai_search_result = {"question": search_question.strip(), "answer": answer, "sources": sources}
+                    answer, sources, provider_name = student_ai_completion([
+                        {
+                            "role": "system",
+                            "content": (
+                                "Answer from your general knowledge only; you have no live web access in this app. "
+                                "Do not invent citations, links, current facts, or source claims. Say when the question needs current information. "
+                                "Explain equations in simple words and write them as readable plain text with named units; never show raw LaTeX commands, backslashes, or dollar delimiters."
+                            ),
+                        },
+                        {"role": "user", "content": f"{language_instruction}\n\nQuestion: {search_question.strip()}"},
+                    ])
+                    st.session_state.ai_search_result = {"question": search_question.strip(), "answer": answer, "sources": sources, "provider": provider_name}
                 except Exception as exc:
-                    key = str(secret("GROQ_API_KEY", ""))
-                    detail = str(exc).replace(key, "[hidden API key]") if key else str(exc)
+                    detail = str(exc)
+                    for key_name in ("GEMINI_API_KEY", "CLOUDFLARE_API_TOKEN"):
+                        key = str(secret(key_name, ""))
+                        if key:
+                            detail = detail.replace(key, "[hidden API key]")
                     st.error(f"AI Search failed ({type(exc).__name__}). Details: {detail[:500]}")
     result = st.session_state.get("ai_search_result")
     if result:
         st.markdown(f"**Your question:** {result['question']}")
+        st.caption(f"Answered with {result.get('provider', 'AI')}")
         render_ai_markdown(result["answer"])
         if result["sources"]:
             st.markdown("**Sources**")
             for source in result["sources"]:
                 st.markdown(f"- [{source['title']}]({source['url']})")
         else:
-            st.caption("No separate source links were returned. Check citations in the answer and verify important details.")
+            st.caption("This answer has no live sources. Verify current facts on official websites.")
 
 elif page == "WhatsApp":
     st.info("WhatsApp Community, Channel, and app-sharing links are on the Home page.")
 
 elif page == "AI Study Buddy":
     st.caption("Ask for a concept explanation, study plan, or hints. Check important course details with your faculty.")
-    st.warning("This AI uses a free plan with usage limits. Don't enter personal, sensitive, or confidential information.")
+    st.warning("Free AI use has daily limits. Don't enter personal, sensitive, or confidential information.")
     response_language = st.selectbox(
         "Answer language", ["English", "Malayalam", "Manglish (Malayalam in English letters)"], key="study_answer_language"
     )
@@ -1209,10 +1203,10 @@ elif page == "AI Study Buddy":
         with st.chat_message("assistant"):
             with st.spinner("Thinking through it…"):
                 answer = ""
+                answer_provider = ""
                 try:
-                    key = secret("GROQ_API_KEY")
-                    if not key:
-                        answer = "The free AI study buddy is not configured yet. Ask the app owner to add GROQ_API_KEY in Streamlit Secrets."
+                    if not any_free_ai_configured():
+                        answer = "AI is not configured yet. Ask the app owner to add Gemini or Cloudflare Workers AI credentials in Streamlit Secrets."
                     else:
                         messages = [
                             {
@@ -1233,11 +1227,16 @@ elif page == "AI Study Buddy":
                             for item in chat[:-1][-8:]
                         )
                         messages.append({"role": "user", "content": question})
-                        answer, _ = groq_completion(messages)
+                        answer, _, answer_provider = student_ai_completion(messages)
                 except Exception as exc:
-                    key = str(secret("GROQ_API_KEY", ""))
-                    detail = str(exc).replace(key, "[hidden API key]") if key else str(exc)
-                    answer = f"Free AI request failed ({type(exc).__name__}). Details: {detail[:500]}"
+                    detail = str(exc)
+                    for key_name in ("GEMINI_API_KEY", "CLOUDFLARE_API_TOKEN"):
+                        key = str(secret(key_name, ""))
+                        if key:
+                            detail = detail.replace(key, "[hidden API key]")
+                    answer = f"AI request failed ({type(exc).__name__}). Details: {detail[:500]}"
+                if answer_provider:
+                    st.caption(f"Answered with {answer_provider}")
                 render_ai_markdown(answer)
         chat.append({"role": "assistant", "content": answer})
 
@@ -1258,40 +1257,6 @@ elif page == "Feedback":
                 st.success("Thank you. Your feedback was sent to the campus creators.")
             except Exception:
                 st.error("Feedback could not be sent. Please try again later.")
-
-# Keep the once-per-day campus alert in the lower-right area of each student page.
-st.divider()
-_, alert_area = st.columns([2, 1])
-with alert_area:
-    with st.container(border=True):
-        st.markdown("**🎨 Today's alert**")
-        if not daily_choice:
-            red_col, yellow_col, green_col = st.columns(3)
-            clicked_choice = None
-            if red_col.button("🔴", key="daily_alert_red", help="Choose red to open a private chat with the campus creator.", use_container_width=True):
-                clicked_choice = "red"
-            if yellow_col.button("🟡", key="daily_alert_yellow", help="Choose yellow to see snow fall today.", use_container_width=True):
-                clicked_choice = "yellow"
-            if green_col.button("🟢", key="daily_alert_green", help="Choose green to earn a ₹5 in-app reward credit.", use_container_width=True):
-                clicked_choice = "green"
-            if clicked_choice:
-                try:
-                    client.table("student_daily_choices").insert({
-                        "user_id": uid, "choice_date": today_iso, "choice": clicked_choice,
-                    }).execute()
-                    if clicked_choice == "red":
-                        st.session_state._pending_nav_page = "Chat with Creator"
-                    st.rerun()
-                except Exception:
-                    st.error("Your daily choice could not be saved. Please ask the creator to run the updated database setup.")
-            st.caption("Choose one per day. Green adds in-app credit, not cash.")
-        else:
-            choice_labels = {"red": "🔴 Private creator chat", "yellow": "🟡 Snowfall", "green": "🟢 ₹5 reward credit"}
-            st.success(f"Today's choice: {choice_labels.get(daily_choice, daily_choice)}")
-            st.caption(f"In-app reward balance: ₹{profile_green_total * 5}")
-            if daily_choice == "red" and st.button("Open private creator chat", key="open_creator_chat"):
-                st.session_state._pending_nav_page = "Chat with Creator"
-                st.rerun()
 
 if page == "Feedback":
     creator_signature = campus_setting("campus_creator_name", "CAMPUS_CREATOR_NAME") or "Campus Creator"
