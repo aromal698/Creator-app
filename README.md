@@ -7,7 +7,7 @@ A two-app Streamlit campus community for B.Tech students. Both apps use one Supa
 - `supabase_schema.sql` — shared database setup, including public and code-protected private groups, chats, daily choices, private creator inbox, page views, and private group-photo storage.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
 
-Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Free Gemini handles study explanations, AI answers, creator drafts, and poster reading; free-tier Cloudflare Workers AI is the text-answer backup. This setup does not use live web-search grounding. A creator reviews AI content before publishing. Both providers have shared usage limits.
+Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Students and creators can choose Groq or Cloudflare Workers AI for text. Each request calls only the selected provider; there is no automatic fallback between them. Poster reading in Creator Studio uses Gemini separately. This setup does not use live web-search grounding. A creator reviews AI content before publishing. Each service has usage limits shared by its account.
 
 ## 1. Create the shared database
 
@@ -42,7 +42,7 @@ Create your WhatsApp Community and Channel, then copy their invite/share URLs. I
 - The Creator Studio **Student inbox** page receives and replies to the private chats started by students.
 - The creator dashboard counts app page openings in **App page views** and **Views today**. These are not unique-student counts: returning to the same page during one login session is counted once. The log stores only the page name and timestamp, not a student ID, email, or chat message.
 - In **Creator Studio → Manage notices & activities**, add event details, optionally upload a photo, then select **Create poster picture from these details**. You can also upload a finished poster and attach it directly. Review the preview, then save or publish. Students see the attached image with the notice/activity.
-- Poster image storage uses a public Supabase Storage bucket so student browsers can display images. Upload only artwork intended to be public. An uploaded background photo is sent to Supabase only when saving or publishing; poster reading sends the selected file to Gemini only after you confirm in the app. Text drafting can fall back to Cloudflare Workers AI; image reading remains Gemini-only.
+- Poster image storage uses a public Supabase Storage bucket so student browsers can display images. Upload only artwork intended to be public. An uploaded background photo is sent to Supabase only when saving or publishing; poster reading sends the selected file to Gemini only after you confirm in the app. Text drafting uses the AI provider selected in the app; image reading remains Gemini-only.
 - Running the updated `supabase_schema.sql` creates the poster bucket and page-view table. `Pillow` in `requirements.txt` enables local poster design generation.
 
 ## 5. Upload code to GitHub
@@ -62,11 +62,11 @@ Do **not** upload `.streamlit/secrets.toml`, API keys, database keys, or creator
 
 ## 6. Set up AI for the student and creator apps
 
-1. Create a Gemini API key in [Google AI Studio](https://aistudio.google.com/app/apikey).
+1. Create a Groq API key at [Groq Console API Keys](https://console.groq.com/keys). In the app Secrets, set `GROQ_API_KEY` to that private key and `GROQ_MODEL = "openai/gpt-oss-20b"`. This code locks the model to one listed on Groq's Free Plan Limits. Groq limits are shared at organization level; check your account's current limits and do not upgrade to a paid plan if you want to stay free. [Groq Free Plan Limits](https://console.groq.com/docs/rate-limits).
 2. Create a Cloudflare account, open **Workers AI → Use REST API**, and create a Workers AI API token. Copy the token and account ID. If you create a token manually, Cloudflare says it needs **Workers AI - Read** and **Workers AI - Edit** permissions.
-3. Keep Cloudflare on **Workers Free**. Its free allocation is 10,000 Neurons per day and requests stop when the daily allowance runs out. If the account is on Workers Paid, usage beyond the allocation is billable. Do not upgrade or enable paid billing if you want zero charges. [Cloudflare free allocation and billing](https://developers.cloudflare.com/workers-ai/platform/pricing/).
-4. Add `GEMINI_API_KEY`, `GEMINI_MODEL = "gemini-3.5-flash-lite"`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"` to Secrets for both Streamlit apps. The app tries Gemini first and uses Workers AI if Gemini is unavailable. It does not switch to paid providers. Poster image reading still uses Gemini.
-5. AI Search uses the models' built-in knowledge, not live internet search. Answers can be wrong or out of date. Never commit API keys to GitHub. See [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing) and [Cloudflare model availability](https://developers.cloudflare.com/workers-ai/models/).
+3. Keep Cloudflare on **Workers Free**. Its free allocation is 10,000 Neurons per day; requests stop when that daily allowance runs out. If the account is on Workers Paid, usage beyond the allocation is billable. [Cloudflare free allocation and billing](https://developers.cloudflare.com/workers-ai/platform/pricing/).
+4. Add `GROQ_API_KEY`, `GROQ_MODEL = "openai/gpt-oss-20b"`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"` to the Secrets for each app. Students choose one in their sidebar; creators choose one in Creator Studio's sidebar. Each request goes only to that selected service. If it is out of quota, manually switch to the other one. Creator Studio's optional poster image reading uses Gemini separately and needs `GEMINI_API_KEY`.
+5. AI Search uses the models' built-in knowledge, not live internet search. Answers can be wrong or out of date. Never commit API keys to GitHub. [Groq chat API](https://console.groq.com/docs/api-reference), [Cloudflare model availability](https://developers.cloudflare.com/workers-ai/models/).
 
 Each app has its own Streamlit Secrets. Add the keys separately to the student app and Creator Studio.
 
@@ -79,8 +79,8 @@ Each app has its own Streamlit Secrets. Add the keys separately to the student a
 ```toml
 SUPABASE_URL = "your-supabase-project-url"
 SUPABASE_ANON_KEY = "your-supabase-publishable-or-anon-key"
-GEMINI_API_KEY = "your-gemini-api-key"
-GEMINI_MODEL = "gemini-3.5-flash-lite"
+GROQ_API_KEY = "your-groq-api-key"
+GROQ_MODEL = "openai/gpt-oss-20b"
 CLOUDFLARE_ACCOUNT_ID = "your-cloudflare-account-id"
 CLOUDFLARE_API_TOKEN = "your-cloudflare-workers-ai-token"
 CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
@@ -99,14 +99,17 @@ SUPABASE_URL = "your-supabase-project-url"
 SUPABASE_SERVICE_ROLE_KEY = "your-supabase-secret-or-service-role-key"
 CAMPUS_CREATOR_PASSWORD = "choose-a-long-private-password"
 CAMPUS_CREATOR_NAME = "Campus Creator"
-GEMINI_API_KEY = "your-gemini-api-key"
-GEMINI_MODEL = "gemini-3.5-flash-lite"
+GROQ_API_KEY = "your-groq-api-key"
+GROQ_MODEL = "openai/gpt-oss-20b"
 CLOUDFLARE_ACCOUNT_ID = "your-cloudflare-account-id"
 CLOUDFLARE_API_TOKEN = "your-cloudflare-workers-ai-token"
 CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
+# Optional: Creator Studio poster image reading only
+GEMINI_API_KEY = "your-gemini-api-key"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 ```
 
-Keep both services on their free tiers. Poster reading still uses Gemini and shares its free-tier quota.
+Keep Groq on its Free plan and Cloudflare on Workers Free if you want no paid usage. Poster reading still uses Gemini separately.
 
 The Creator Studio password is shared in this starter version. Anyone who has it can manage campus updates and groups; the creator name is used as the signed-in display name, not as a separate account or password. Keep the Creator Studio URL and password for authorized creators. The service-role key can bypass student row policies; never add it to the student app's secrets or GitHub. [Supabase API key safety](https://supabase.com/docs/guides/getting-started/api-keys).
 
@@ -117,8 +120,8 @@ The Creator Studio password is shared in this starter version. Anyone who has it
 - The creator makes private groups in **Creator Studio → Group admin** and shares the generated invite code with selected students. The database stores only a hash of the code. If a code is lost, choose **Manage groups and members → Generate / replace invite code**; this invalidates the previous code but keeps current members. Students join through **Study Groups → Join with code**; a successful join opens that group's chat. Private groups stay hidden from students who have not joined. Students can create public groups only.
 - The student Home page puts the important notice and all published campus notices near the top; notices are arranged in three columns. It shows today's activities and creator-highlighted special days from the campus calendar, and generates a daily AI study thought in English and Malayalam. The AI summary only uses events the creator marked as special.
 - **Campus Calendar** shows published event details by selected date, Google Calendar (if configured), and Add to Google Calendar links.
-- **AI Study Buddy, AI Search, and Creator Studio text drafting** use Gemini first and Cloudflare Workers AI as a free-tier backup. AI Search uses model knowledge, not live web search, and answers can be wrong or out of date. Check current claims with trusted sources.
-- Free tiers have limits shared by all students. Cloudflare Workers Free includes 10,000 Neurons a day; after the limit, requests stop. Do not move the Cloudflare account to Workers Paid if you need to avoid charges. [Cloudflare pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/), [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing).
+- **AI Study Buddy, AI Search, and Creator Studio text drafting** let the user choose Groq or Cloudflare Workers AI. A request goes to only that service; there is no automatic switching. AI Search uses model knowledge, not live web search, and answers can be wrong or out of date. Check current claims with trusted sources.
+- Free tiers have limits shared by all users of each account. Cloudflare Workers Free includes 10,000 Neurons a day; Groq Free limits depend on the selected model and account. When one service reaches its limit, manually select the other service. [Cloudflare pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/), [Groq free limits](https://console.groq.com/docs/rate-limits).
 - Feedback is the final page in the student navigation and ends with the campus creator's name/sign on the lower right. Every non-home page has a Back to home button.
 - Click the hanging bulb at top-right to cycle through seven color themes: White, Dark, Blue, Purple, Amber, Rose, and Teal. The current theme name appears below the bulb.
 - The student sidebar uses a theme-aware vertical icon-card menu. Each page is a separate menu item, and the current page is highlighted.
