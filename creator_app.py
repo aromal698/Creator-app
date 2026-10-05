@@ -20,6 +20,7 @@ from supabase import create_client
 
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other", "Cross-department"]
 FREE_CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
+FREE_GROQ_MODEL = "openai/gpt-oss-20b"
 THEMES = [
     {"name": "White", "bg": "#f7faf8", "side": "#edf3ef", "surface": "#ffffff", "text": "#172b27", "muted": "#526861", "accent": "#176b5b", "soft": "#e3f1e8", "border": "#d2e3d8"},
     {"name": "Dark", "bg": "#101820", "side": "#17242d", "surface": "#1c2a34", "text": "#edf5f7", "muted": "#b3c4cb", "accent": "#59c3a5", "soft": "#203a3b", "border": "#35515a"},
@@ -113,70 +114,73 @@ def creator_sign_out():
     st.session_state.creator_page = "Creator dashboard"
 
 
-def gemini_generate_text(system_prompt, user_prompt):
-    """Try free Gemini, then free-tier Cloudflare Workers AI for creator text."""
-    gemini_key = str(secret("GEMINI_API_KEY", "")).strip()
-    failures = []
-    if gemini_key:
+def creator_ai_generate_text(system_prompt, user_prompt):
+    """Use exactly the free AI text provider selected in Creator Studio."""
+    provider = st.session_state.get("creator_ai_provider", "Groq")
+    if provider == "Groq":
+        api_key = str(secret("GROQ_API_KEY", "")).strip()
+        if not api_key:
+            raise RuntimeError("Groq is not configured in Creator Studio Secrets.")
+        model = str(secret("GROQ_MODEL", FREE_GROQ_MODEL)).strip()
+        if model != FREE_GROQ_MODEL:
+            raise RuntimeError(f"Free-only mode allows only {FREE_GROQ_MODEL} on Groq Free.")
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": model, "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ], "temperature": 0.3, "max_completion_tokens": 900},
+            timeout=90,
+        )
         try:
-            response = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{secret('GEMINI_MODEL', 'gemini-3.5-flash-lite')}:generateContent",
-                headers={"x-goog-api-key": gemini_key, "Content-Type": "application/json"},
-                json={
-                    "systemInstruction": {"parts": [{"text": system_prompt}]},
-                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                    "generationConfig": {"temperature": 0.4, "maxOutputTokens": 900},
-                },
-                timeout=60,
-            )
             result = response.json()
-            if not response.ok:
-                message = result.get("error", {}).get("message", response.text[:400])
-                raise RuntimeError(f"Gemini API returned HTTP {response.status_code}: {message}")
-            parts = result["candidates"][0]["content"]["parts"]
-            text = "".join(part.get("text", "") for part in parts if isinstance(part, dict)).strip()
-            if text:
-                return text
-            raise RuntimeError("Gemini returned no text.")
-        except Exception as exc:
-            failures.append(f"Gemini: {str(exc)[:250]}")
+        except ValueError:
+            result = {}
+        if not response.ok:
+            error = result.get("error", {}) if isinstance(result, dict) else {}
+            message = error.get("message", response.text[:350]) if isinstance(error, dict) else str(error)
+            raise RuntimeError(f"Groq returned HTTP {response.status_code}: {message}")
+        choices = result.get("choices", []) if isinstance(result, dict) else []
+        text = str((choices[0].get("message") or {}).get("content", "")) if choices else ""
+        if not text:
+            raise RuntimeError("Groq returned no text.")
+        return text.strip()
+
+    if provider != "Cloudflare Workers AI":
+        raise RuntimeError("Choose Groq or Cloudflare Workers AI in the sidebar.")
 
     account_id = str(secret("CLOUDFLARE_ACCOUNT_ID", "")).strip()
     api_token = str(secret("CLOUDFLARE_API_TOKEN", "")).strip()
-    if account_id and api_token:
-        try:
-            model = str(secret("CLOUDFLARE_MODEL", FREE_CLOUDFLARE_MODEL)).strip()
-            if model != FREE_CLOUDFLARE_MODEL:
-                raise RuntimeError(f"Free-only mode allows only {FREE_CLOUDFLARE_MODEL} on Workers Free.")
-            endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{quote(model, safe='@/-')}"
-            response = requests.post(
-                endpoint,
-                headers={"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"},
-                json={
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "max_tokens": 900,
-                    "temperature": 0.3,
-                },
-                timeout=90,
-            )
-            result = response.json()
-            output = result.get("result", {}) if isinstance(result, dict) else {}
-            text = str(output.get("response", "") if isinstance(output, dict) else "").strip()
-            if not response.ok or result.get("success") is False:
-                errors = result.get("errors", []) if isinstance(result, dict) else []
-                detail = errors[0].get("message", "Request failed") if errors and isinstance(errors[0], dict) else response.text[:350]
-                raise RuntimeError(f"Cloudflare Workers AI returned HTTP {response.status_code}: {detail}")
-            if text:
-                return text
-            raise RuntimeError("Cloudflare Workers AI returned no text.")
-        except Exception as exc:
-            failures.append(f"Cloudflare: {str(exc)[:250]}")
-    if failures:
-        raise RuntimeError("Both configured free AI services failed. " + " | ".join(failures))
-    raise RuntimeError("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI.")
+    if not account_id or not api_token:
+        raise RuntimeError("Cloudflare Workers AI is not configured in Creator Studio Secrets.")
+    model = str(secret("CLOUDFLARE_MODEL", FREE_CLOUDFLARE_MODEL)).strip()
+    if model != FREE_CLOUDFLARE_MODEL:
+        raise RuntimeError(f"Free-only mode allows only {FREE_CLOUDFLARE_MODEL} on Workers Free.")
+    endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{quote(model, safe='@/-')}"
+    response = requests.post(
+        endpoint,
+        headers={"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"},
+        json={
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": 900,
+            "temperature": 0.3,
+        },
+        timeout=90,
+    )
+    result = response.json()
+    output = result.get("result", {}) if isinstance(result, dict) else {}
+    text = str(output.get("response", "") if isinstance(output, dict) else "").strip()
+    if not response.ok or result.get("success") is False:
+        errors = result.get("errors", []) if isinstance(result, dict) else []
+        detail = errors[0].get("message", "Request failed") if errors and isinstance(errors[0], dict) else response.text[:350]
+        raise RuntimeError(f"Cloudflare Workers AI returned HTTP {response.status_code}: {detail}")
+    if not text:
+        raise RuntimeError("Cloudflare Workers AI returned no text.")
+    return text
 
 
 def ai_draft_from_poster(image_bytes, image_type, kind, title, event_day, audience, notes, language):
@@ -339,7 +343,7 @@ def upload_new_poster_asset(kind, title, event_day, audience, details, backgroun
 
 
 def ai_draft(kind, title, event_day, audience, notes, language):
-    return gemini_generate_text(
+    return creator_ai_generate_text(
         f"Draft a clear, concise campus {kind.lower()} for B.Tech students. Use only the provided facts. "
         "Do not invent time, venue, fees, links, contact details, or organizers; add [creator: add details] where missing. "
         "Use a friendly and professional tone. Return only the draft. "
@@ -350,7 +354,7 @@ def ai_draft(kind, title, event_day, audience, notes, language):
 
 
 def ai_group_description(name, department, semester, language):
-    return gemini_generate_text(
+    return creator_ai_generate_text(
         "Write a friendly one or two sentence purpose for a student study/chat group. "
         "Do not invent campus-specific facts, dates, links, or promises. Return only the description. "
         f"Write in {language}. For Manglish, write Malayalam using English/Latin letters, not Malayalam script.",
@@ -437,6 +441,22 @@ creator_ai_language = st.sidebar.selectbox(
     key="creator_ai_language",
     help="Choose the language for AI drafted notices, activities, and group descriptions.",
 )
+creator_ai_provider_options = []
+if str(secret("GROQ_API_KEY", "")).strip():
+    creator_ai_provider_options.append("Groq")
+if str(secret("CLOUDFLARE_ACCOUNT_ID", "")).strip() and str(secret("CLOUDFLARE_API_TOKEN", "")).strip():
+    creator_ai_provider_options.append("Cloudflare Workers AI")
+if not creator_ai_provider_options:
+    creator_ai_provider_options = ["Groq", "Cloudflare Workers AI"]
+if st.session_state.get("creator_ai_provider") not in creator_ai_provider_options:
+    st.session_state.creator_ai_provider = creator_ai_provider_options[0]
+st.sidebar.selectbox(
+    "AI provider for text",
+    creator_ai_provider_options,
+    key="creator_ai_provider",
+    help="Each text draft uses only the selected provider. Poster reading uses Gemini separately.",
+)
+st.sidebar.caption("One AI service per text request. No automatic switching. Poster reading uses Gemini separately.")
 st.sidebar.button("Sign out", on_click=creator_sign_out)
 
 heading, bulb = st.columns([12, 1])
@@ -559,7 +579,7 @@ elif page == "Manage notices & activities":
                     st.session_state.new_post_body = draft
                     st.rerun()
                 else:
-                    st.warning("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI drafting.")
+                    st.warning("Add GROQ_API_KEY or Cloudflare Workers AI credentials to Creator Studio Secrets to draft text.")
             except Exception as exc:
                 st.error(f"AI could not draft this update: {str(exc)[:400]}. You can write it manually.")
         poster = st.file_uploader(
@@ -728,7 +748,7 @@ elif page == "Manage notices & activities":
                         st.session_state[body_key] = draft
                         st.rerun()
                     else:
-                        st.warning("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI drafting.")
+                        st.warning("Add GROQ_API_KEY or Cloudflare Workers AI credentials to Creator Studio Secrets to draft text.")
                 except Exception as exc:
                     st.error(f"AI could not rewrite this update: {str(exc)[:400]}. You can edit it manually.")
             edit_body = st.text_area("Review and edit text", value=item["body"], key=body_key, height=180)
@@ -870,7 +890,7 @@ elif page == "Group admin":
                     st.session_state.admin_group_description = suggestion
                     st.rerun()
                 else:
-                    st.warning("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI.")
+                    st.warning("Add GROQ_API_KEY or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI.")
             except Exception as exc:
                 st.error(f"AI could not suggest a group purpose: {str(exc)[:400]}. You can still write one yourself.")
         if st.button("Create active group", type="primary", disabled=not name.strip()):
@@ -965,7 +985,7 @@ elif page == "Group admin":
                         st.session_state[g_desc_key] = suggestion
                         st.rerun()
                     else:
-                        st.warning("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI.")
+                        st.warning("Add GROQ_API_KEY or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI.")
                 except Exception as exc:
                     st.error(f"AI could not rewrite this description: {str(exc)[:400]}.")
             g_desc = st.text_area("Description", value=group.get("description") or "", key=g_desc_key)
