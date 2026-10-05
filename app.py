@@ -247,10 +247,32 @@ def groq_completion(messages):
     model = str(secret("GROQ_MODEL", FREE_GROQ_MODEL)).strip()
     if model != FREE_GROQ_MODEL:
         raise RuntimeError(f"Free-only mode allows only {FREE_GROQ_MODEL} on Groq Free.")
+    system_text = "\n\n".join(
+        str(item.get("content", "")) for item in messages if item.get("role") == "system"
+    ).strip()
+    groq_messages = [
+        {"role": item.get("role"), "content": str(item.get("content", ""))}
+        for item in messages if item.get("role") in ("user", "assistant")
+    ]
+    # Groq recommends avoiding system-role messages with GPT-OSS models.
+    if system_text:
+        if groq_messages and groq_messages[0]["role"] == "user":
+            groq_messages[0]["content"] = f"Instructions:\n{system_text}\n\n{groq_messages[0]['content']}"
+        else:
+            groq_messages.insert(0, {"role": "user", "content": f"Instructions:\n{system_text}"})
+    if not groq_messages:
+        raise ValueError("Add a question before asking Groq.")
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={"model": model, "messages": messages, "temperature": 0.3, "max_completion_tokens": 1400},
+        json={
+            "model": model,
+            "messages": groq_messages,
+            "temperature": 0.5,
+            "reasoning_effort": "low",
+            "reasoning_format": "hidden",
+            "max_completion_tokens": 1400,
+        },
         timeout=90,
     )
     try:
