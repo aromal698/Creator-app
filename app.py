@@ -22,6 +22,7 @@ DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Bi
 SEMESTERS = list(range(1, 9))
 NAV_PAGES = ["Home", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "Feedback"]
 FREE_CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
+FREE_GROQ_MODEL = "openai/gpt-oss-20b"
 NAV_PAGE_ICONS = {
     "Home": "⌂", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
     "Campus Calendar": "📅", "Campus Activities": "🎪", "Notices": "📌",
@@ -203,7 +204,7 @@ def gemini_completion(messages):
 
 
 def cloudflare_completion(messages):
-    """Free-tier Workers AI fallback. It never routes to third-party paid providers."""
+    """Call only Cloudflare Workers AI using its separate credentials."""
     account_id = str(secret("CLOUDFLARE_ACCOUNT_ID", "")).strip()
     api_token = str(secret("CLOUDFLARE_API_TOKEN", "")).strip()
     if not account_id or not api_token:
@@ -238,28 +239,50 @@ def cloudflare_completion(messages):
     return answer
 
 
+def groq_completion(messages):
+    """Call only Groq's OpenAI-compatible chat endpoint with its own API key."""
+    api_key = str(secret("GROQ_API_KEY", "")).strip()
+    if not api_key:
+        raise RuntimeError("Groq is not configured in this app's Streamlit Secrets.")
+    model = str(secret("GROQ_MODEL", FREE_GROQ_MODEL)).strip()
+    if model != FREE_GROQ_MODEL:
+        raise RuntimeError(f"Free-only mode allows only {FREE_GROQ_MODEL} on Groq Free.")
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"model": model, "messages": messages, "temperature": 0.3, "max_completion_tokens": 1400},
+        timeout=90,
+    )
+    try:
+        result = response.json()
+    except ValueError:
+        result = {}
+    if not response.ok:
+        error = result.get("error", {}) if isinstance(result, dict) else {}
+        detail = error.get("message", response.text[:350]) if isinstance(error, dict) else str(error)
+        raise RuntimeError(f"Groq returned HTTP {response.status_code}: {detail}")
+    choices = result.get("choices", []) if isinstance(result, dict) else []
+    answer = ""
+    if choices:
+        answer = str((choices[0].get("message") or {}).get("content", ""))
+    if not answer.strip():
+        raise RuntimeError("Groq returned no text.")
+    return answer.strip()
+
+
 def any_free_ai_configured():
-    return bool(secret("GEMINI_API_KEY") or (secret("CLOUDFLARE_ACCOUNT_ID") and secret("CLOUDFLARE_API_TOKEN")))
+    return bool(secret("GROQ_API_KEY") or (secret("CLOUDFLARE_ACCOUNT_ID") and secret("CLOUDFLARE_API_TOKEN")))
 
 
 def student_ai_completion(messages):
-    """Try free Gemini first, then free-tier Cloudflare Workers AI; no paid fallback."""
-    failures = []
-    if str(secret("GEMINI_API_KEY", "")).strip():
-        try:
-            answer, sources = gemini_completion(messages)
-            return answer, sources, "Gemini"
-        except Exception as exc:
-            failures.append(f"Gemini: {str(exc)[:250]}")
-    if str(secret("CLOUDFLARE_ACCOUNT_ID", "")).strip() and str(secret("CLOUDFLARE_API_TOKEN", "")).strip():
-        try:
-            answer = cloudflare_completion(messages)
-            return answer, [], "Cloudflare Workers AI · Gemma 4"
-        except Exception as exc:
-            failures.append(f"Cloudflare: {str(exc)[:250]}")
-    if failures:
-        raise RuntimeError("Both configured free AI services failed. " + " | ".join(failures))
-    raise RuntimeError("Add Gemini or Cloudflare Workers AI credentials to the student app's Streamlit Secrets.")
+    """Use only the provider selected by the student; never call both for one answer."""
+    provider = st.session_state.get("student_ai_provider", "Groq")
+    if provider == "Groq":
+        return groq_completion(messages), [], "Groq · GPT OSS 20B"
+    if provider == "Cloudflare Workers AI":
+        answer = cloudflare_completion(messages)
+        return answer, [], "Cloudflare Workers AI · Gemma 4"
+    raise RuntimeError("Choose Groq or Cloudflare Workers AI in the sidebar.")
 
 
 def render_ai_markdown(answer):
@@ -730,6 +753,22 @@ with st.sidebar:
                     st.rerun()
                 except Exception as profile_error:
                     st.error(f"Could not save your profile: {str(profile_error)[:250]}")
+    ai_provider_options = []
+    if str(secret("GROQ_API_KEY", "")).strip():
+        ai_provider_options.append("Groq")
+    if str(secret("CLOUDFLARE_ACCOUNT_ID", "")).strip() and str(secret("CLOUDFLARE_API_TOKEN", "")).strip():
+        ai_provider_options.append("Cloudflare Workers AI")
+    if not ai_provider_options:
+        ai_provider_options = ["Groq", "Cloudflare Workers AI"]
+    if st.session_state.get("student_ai_provider") not in ai_provider_options:
+        st.session_state.student_ai_provider = ai_provider_options[0]
+    st.selectbox(
+        "AI provider",
+        ai_provider_options,
+        key="student_ai_provider",
+        help="Each request uses only the selected AI. Switch providers if its free quota is unavailable.",
+    )
+    st.caption("Each request goes to only the selected service. No automatic switching.")
     st.caption("Notices and activities are published by campus creators.")
     st.divider()
     page = st.radio(
@@ -1126,7 +1165,7 @@ elif page == "Campus Calendar":
 
 elif page == "AI Search":
     st.caption("Ask a free AI a question and get a clear answer in your chosen language.")
-    st.info("Free-only mode uses Gemini or Cloudflare Workers AI's built-in knowledge. It does not search the live web, so check current facts and sources yourself.")
+    st.info("Free-tier mode uses Groq or Cloudflare Workers AI's built-in knowledge. It does not search the live web, so check current facts and sources yourself.")
     st.info("AI answers can still be wrong or out of date. Verify important academic, medical, legal, or safety information with an official source.")
     response_language = st.selectbox(
         "Answer language", ["English", "Malayalam", "Manglish (Malayalam in English letters)"], key="search_answer_language"
@@ -1139,7 +1178,7 @@ elif page == "AI Search":
         if not search_question.strip():
             st.warning("Enter a question to search.")
         elif not any_free_ai_configured():
-            st.error("AI is not configured. Add Gemini or Cloudflare Workers AI credentials to the student app's Streamlit Secrets.")
+            st.error("AI is not configured. Add GROQ_API_KEY or the Cloudflare Workers AI credentials to the student app's Streamlit Secrets.")
         else:
             with st.spinner("Free AI is preparing an answer…"):
                 try:
@@ -1162,7 +1201,7 @@ elif page == "AI Search":
                     st.session_state.ai_search_result = {"question": search_question.strip(), "answer": answer, "sources": sources, "provider": provider_name}
                 except Exception as exc:
                     detail = str(exc)
-                    for key_name in ("GEMINI_API_KEY", "CLOUDFLARE_API_TOKEN"):
+                    for key_name in ("GROQ_API_KEY", "CLOUDFLARE_API_TOKEN"):
                         key = str(secret(key_name, ""))
                         if key:
                             detail = detail.replace(key, "[hidden API key]")
@@ -1206,7 +1245,7 @@ elif page == "AI Study Buddy":
                 answer_provider = ""
                 try:
                     if not any_free_ai_configured():
-                        answer = "AI is not configured yet. Ask the app owner to add Gemini or Cloudflare Workers AI credentials in Streamlit Secrets."
+                        answer = "AI is not configured yet. Ask the app owner to add Groq or Cloudflare Workers AI credentials in Streamlit Secrets."
                     else:
                         messages = [
                             {
@@ -1230,7 +1269,7 @@ elif page == "AI Study Buddy":
                         answer, _, answer_provider = student_ai_completion(messages)
                 except Exception as exc:
                     detail = str(exc)
-                    for key_name in ("GEMINI_API_KEY", "CLOUDFLARE_API_TOKEN"):
+                    for key_name in ("GROQ_API_KEY", "CLOUDFLARE_API_TOKEN"):
                         key = str(secret(key_name, ""))
                         if key:
                             detail = detail.replace(key, "[hidden API key]")
