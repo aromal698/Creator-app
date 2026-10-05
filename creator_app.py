@@ -124,13 +124,20 @@ def creator_ai_generate_text(system_prompt, user_prompt):
         model = str(secret("GROQ_MODEL", FREE_GROQ_MODEL)).strip()
         if model != FREE_GROQ_MODEL:
             raise RuntimeError(f"Free-only mode allows only {FREE_GROQ_MODEL} on Groq Free.")
+        groq_messages = [
+            {"role": "user", "content": f"Instructions:\n{system_prompt}\n\n{user_prompt}"}
+        ]
         response = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ], "temperature": 0.3, "max_completion_tokens": 900},
+            json={
+                "model": model,
+                "messages": groq_messages,
+                "temperature": 0.5,
+                "reasoning_effort": "low",
+                "reasoning_format": "hidden",
+                "max_completion_tokens": 900,
+            },
             timeout=90,
         )
         try:
@@ -171,9 +178,16 @@ def creator_ai_generate_text(system_prompt, user_prompt):
         },
         timeout=90,
     )
-    result = response.json()
+    try:
+        result = response.json()
+    except ValueError:
+        result = {}
     output = result.get("result", {}) if isinstance(result, dict) else {}
     text = str(output.get("response", "") if isinstance(output, dict) else "").strip()
+    if not text and isinstance(output, dict):
+        choices = output.get("choices", [])
+        if choices:
+            text = str((choices[0].get("message") or {}).get("content", "")).strip()
     if not response.ok or result.get("success") is False:
         errors = result.get("errors", []) if isinstance(result, dict) else []
         detail = errors[0].get("message", "Request failed") if errors and isinstance(errors[0], dict) else response.text[:350]
