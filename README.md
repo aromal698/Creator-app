@@ -2,12 +2,12 @@
 
 A two-app Streamlit campus community for B.Tech students. Both apps use one Supabase database.
 
-- `app.py` — student app: email/password profiles, department and semester groups, WhatsApp-style chat with photo/camera and emoji support, daily red/yellow/green alerts, private creator chat, campus updates, calendar, and AI study tools.
+- `app.py` — student app: direct Home access with anonymous Supabase sessions and profiles, department and semester groups, WhatsApp-style chat with photo/camera and emoji support, daily red/yellow/green alerts, private creator chat, campus updates, calendar, and AI study tools.
 - `creator_app.py` — Creator Studio sign-in asks for a creator name and the shared creator password; it includes campus post tools, group administration, private student inbox, and page-view totals.
 - `supabase_schema.sql` — shared database setup, including public and code-protected private groups, chats, daily choices, private creator inbox, page views, and private group-photo storage.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
 
-Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Groq AI helps with study explanations, web search, the daily original campus thought, and creator drafts. Poster reading uses Groq's image-capable Qwen model and may require paid model access; the creator app asks before sending an uploaded image. A creator reviews content before publishing. AI cannot guarantee factual accuracy. Usage limits apply, and all app users share the app owner's quota.
+Student pages show published campus content. Creator drafts and edit controls remain in Creator Studio. Free Gemini handles study explanations, AI answers, creator drafts, and poster reading; free-tier Cloudflare Workers AI is the text-answer backup. This setup does not use live web-search grounding. A creator reviews AI content before publishing. Both providers have shared usage limits.
 
 ## 1. Create the shared database
 
@@ -15,11 +15,9 @@ Student pages show published campus content. Creator drafts and edit controls re
 2. In the project, open **SQL Editor → New query**.
 3. Open `supabase_schema.sql`, copy its full contents, paste into the SQL Editor, and click **Run**. This creates groups for the listed departments and semesters 1–8, chats, daily alerts, a private creator inbox, page-view counts, storage buckets, and access policies.
    If the database already exists, run the updated SQL again. It adds missing columns/tables and refreshes policies without deleting existing posts or messages.
-4. In **Authentication → Sign In / Providers → Email**, enable **Allow new users to sign up**. Turn **Confirm email** off if students should start using the app immediately after creating their profile. The app does not use anonymous sign-ins.
-5. For Google login, create a **Web application** OAuth client in Google Cloud. Add the student app URL as an authorized JavaScript origin. Add both redirect URLs: `https://YOUR-APP.streamlit.app/oauth2callback` and the Supabase Google provider callback shown in Supabase's Google provider settings. Then enable Google under **Supabase → Authentication → Sign In / Providers → Google** and enter the same Google client ID and secret. Google login creates/uses a Supabase account so the database policies for chats and profiles still apply.
-6. In the student app's Streamlit Secrets, add the `[auth]` block shown below. Set `redirect_uri` to the exact `/oauth2callback` URL of the deployed student app and replace the Google values. `cookie_secret` must be a long, private, random string; never commit the real value. `expose_tokens = ["id"]` lets the server exchange the verified Google ID token for a Supabase student session.
-7. Students can select **Continue with Google**. On first use, they save their name, department, and semester once. Streamlit remembers the Google login in that browser for up to 30 days. Google ID tokens expire sooner; if one has expired, the student may need to tap **Continue with Google** again, but Google may not ask them to retype their password if that browser is still signed into Google. They can also keep using email and password. Streamlit's supported login and cookie behavior is documented [here](https://docs.streamlit.io/develop/concepts/connections/authentication).
-8. Find the project URL and publishable/anon key in the Supabase API key settings. Keep the service-role/secret key for the server-side Creator Studio only.
+4. In Supabase **Authentication** settings, enable **Anonymous Sign-Ins**. The student app needs this so students can enter without an email/password screen while database access remains tied to a private Supabase user ID. Email confirmation is not used by the student app.
+5. Students enter the Home dashboard, then save their registration number, name, department, and semester in the sidebar profile form. Anonymous profiles cannot be recovered after a browser session is lost or on a different device; a registration number by itself does not prove who owns that profile. For a permanent student account, add a recoverable sign-in method later.
+6. Find the project URL and publishable/anon key in the Supabase API key settings. Keep the service-role/secret key for the server-side Creator Studio only.
 
 ## 2. Create a public campus Google Calendar (optional)
 
@@ -36,15 +34,15 @@ A creator-published Supabase event does not automatically get written into the G
 
 Create your WhatsApp Community and Channel, then copy their invite/share URLs. In **Creator Studio → Campus links**, save those URLs, paste the public student app URL into **Public student app link**, and set **Creator name / Feedback signature**. Students see the WhatsApp Community, Channel, and app-sharing buttons only on the student app's **Home** page. To show the app on a WhatsApp Business profile, add its URL to the Business profile's Website field. CampusConnect opens WhatsApp links; it does not read or send WhatsApp messages.
 
-## 4. Student login, page views, and notice posters
+## 4. Student profile, page views, and notice posters
 
-- New students create an email/password account and profile. Returning students sign in with that same email and password. With **Confirm email** off, Supabase does not require an email confirmation before the account can be used.
-- A small red/yellow/green alert panel appears at the lower right of student pages. Students can choose once per day: red opens a private chat with the creator, yellow shows snowfall, and green adds ₹5 of in-app credit. This is not a cash payment.
+- Students open Home without an email/password form. Their registration number, name, department, and semester are saved in the current anonymous Supabase profile. A lost anonymous session cannot be recovered using only the registration number.
+- A small red/yellow/green alert panel appears near the top right of student pages. Students can choose once per day: red opens a private chat with the creator, yellow shows snowfall, and green adds ₹5 of in-app credit. This is not a cash payment.
 - Group chat photos and camera pictures are stored in a private bucket. Only members of the matching group can view them. Emoji and captions can also be sent. Select one or more of your own messages and use **Delete selected** to remove them; other students' messages cannot be selected or deleted by you.
 - The Creator Studio **Student inbox** page receives and replies to the private chats started by students.
 - The creator dashboard counts app page openings in **App page views** and **Views today**. These are not unique-student counts: returning to the same page during one login session is counted once. The log stores only the page name and timestamp, not a student ID, email, or chat message.
 - In **Creator Studio → Manage notices & activities**, add event details, optionally upload a photo, then select **Create poster picture from these details**. You can also upload a finished poster and attach it directly. Review the preview, then save or publish. Students see the attached image with the notice/activity.
-- Poster image storage uses a public Supabase Storage bucket so student browsers can display images. Upload only artwork intended to be public. An uploaded background photo is sent to Supabase only when saving or publishing; poster reading sends the selected file to Groq only after you confirm in the app.
+- Poster image storage uses a public Supabase Storage bucket so student browsers can display images. Upload only artwork intended to be public. An uploaded background photo is sent to Supabase only when saving or publishing; poster reading sends the selected file to Gemini only after you confirm in the app. Text drafting can fall back to Cloudflare Workers AI; image reading remains Gemini-only.
 - Running the updated `supabase_schema.sql` creates the poster bucket and page-view table. `Pillow` in `requirements.txt` enables local poster design generation.
 
 ## 5. Upload code to GitHub
@@ -62,13 +60,15 @@ Upload and commit these files to your repository root:
 
 Do **not** upload `.streamlit/secrets.toml`, API keys, database keys, or creator passwords. `.gitignore` hides the local `secrets.toml` from Git, but do not rely on that as your only safeguard: check carefully before committing.
 
-## 6. Create a Groq API key (free plan)
+## 6. Set up AI for the student and creator apps
 
-1. Create/sign in to a Groq account at [console.groq.com](https://console.groq.com/).
-2. Open [API Keys](https://console.groq.com/keys) and create a key for CampusConnect.
-3. Keep the account on its Free plan for supported free-tier text requests. Free usage has limits; if the app's shared quota is used up, AI requests stop until the limit resets. Poster image reading uses a vision model with separate pricing/access and asks for confirmation in Creator Studio before sending an image. Never commit the key to GitHub.
+1. Create a Gemini API key in [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. Create a Cloudflare account, open **Workers AI → Use REST API**, and create a Workers AI API token. Copy the token and account ID. If you create a token manually, Cloudflare says it needs **Workers AI - Read** and **Workers AI - Edit** permissions.
+3. Keep Cloudflare on **Workers Free**. Its free allocation is 10,000 Neurons per day and requests stop when the daily allowance runs out. If the account is on Workers Paid, usage beyond the allocation is billable. Do not upgrade or enable paid billing if you want zero charges. [Cloudflare free allocation and billing](https://developers.cloudflare.com/workers-ai/platform/pricing/).
+4. Add `GEMINI_API_KEY`, `GEMINI_MODEL = "gemini-3.5-flash-lite"`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"` to Secrets for both Streamlit apps. The app tries Gemini first and uses Workers AI if Gemini is unavailable. It does not switch to paid providers. Poster image reading still uses Gemini.
+5. AI Search uses the models' built-in knowledge, not live internet search. Answers can be wrong or out of date. Never commit API keys to GitHub. See [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing) and [Cloudflare model availability](https://developers.cloudflare.com/workers-ai/models/).
 
-The student and creator apps each need the same `GROQ_API_KEY` added separately to their own Streamlit Secrets.
+Each app has its own Streamlit Secrets. Add the keys separately to the student app and Creator Studio.
 
 ## 7. Deploy the student app
 
@@ -79,16 +79,11 @@ The student and creator apps each need the same `GROQ_API_KEY` added separately 
 ```toml
 SUPABASE_URL = "your-supabase-project-url"
 SUPABASE_ANON_KEY = "your-supabase-publishable-or-anon-key"
-GROQ_API_KEY = "your-groq-api-key"
-GROQ_MODEL = "openai/gpt-oss-20b"
-
-[auth]
-redirect_uri = "https://YOUR-APP.streamlit.app/oauth2callback"
-cookie_secret = "replace-with-your-own-long-random-secret"
-client_id = "your-google-oauth-client-id"
-client_secret = "your-google-oauth-client-secret"
-server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
-expose_tokens = ["id"]
+GEMINI_API_KEY = "your-gemini-api-key"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+CLOUDFLARE_ACCOUNT_ID = "your-cloudflare-account-id"
+CLOUDFLARE_API_TOKEN = "your-cloudflare-workers-ai-token"
+CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
 ```
 
 Replace all examples with your real settings and click **Deploy**. Calendar and WhatsApp URLs are entered later by the creator in Creator Studio → Campus links. Streamlit's docs show the entrypoint and secrets fields in the deploy workflow. [Deploy an app](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app).
@@ -104,24 +99,26 @@ SUPABASE_URL = "your-supabase-project-url"
 SUPABASE_SERVICE_ROLE_KEY = "your-supabase-secret-or-service-role-key"
 CAMPUS_CREATOR_PASSWORD = "choose-a-long-private-password"
 CAMPUS_CREATOR_NAME = "Campus Creator"
-GROQ_API_KEY = "your-groq-api-key"
-GROQ_MODEL = "openai/gpt-oss-20b"
-GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
+GEMINI_API_KEY = "your-gemini-api-key"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+CLOUDFLARE_ACCOUNT_ID = "your-cloudflare-account-id"
+CLOUDFLARE_API_TOKEN = "your-cloudflare-workers-ai-token"
+CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
 ```
 
-The poster-reading model may incur usage charges; you can omit `GROQ_VISION_MODEL` to use its default, but the creator must still confirm before each poster analysis.
+Keep both services on their free tiers. Poster reading still uses Gemini and shares its free-tier quota.
 
 The Creator Studio password is shared in this starter version. Anyone who has it can manage campus updates and groups; the creator name is used as the signed-in display name, not as a separate account or password. Keep the Creator Studio URL and password for authorized creators. The service-role key can bypass student row policies; never add it to the student app's secrets or GitHub. [Supabase API key safety](https://supabase.com/docs/guides/getting-started/api-keys).
 
 ## 9. Use CampusConnect
 
-- Students create their profile once with email, password, name, department, and semester. On later visits they choose **Log in** and use that same email and password to return to their saved profile.
+- Students open the Home dashboard directly. The app silently creates a Supabase anonymous session, then asks for registration number, name, department, and semester in the sidebar. The alert choices are at the top-right of the student page. Anonymous profiles are temporary identities; if a student loses the browser session or changes device, a registration number alone cannot recover the same identity.
 - Students get a separate seeded chat group for each department and semester (for example, CSE · Semester 3). The Study Groups page starts filtered to the student's own department and semester; students can also browse other groups or create a new group. Joining opens that group's chat.
 - The creator makes private groups in **Creator Studio → Group admin** and shares the generated invite code with selected students. The database stores only a hash of the code. If a code is lost, choose **Manage groups and members → Generate / replace invite code**; this invalidates the previous code but keeps current members. Students join through **Study Groups → Join with code**; a successful join opens that group's chat. Private groups stay hidden from students who have not joined. Students can create public groups only.
 - The student Home page puts the important notice and all published campus notices near the top; notices are arranged in three columns. It shows today's activities and creator-highlighted special days from the campus calendar, and generates a daily AI study thought in English and Malayalam. The AI summary only uses events the creator marked as special.
 - **Campus Calendar** shows published event details by selected date, Google Calendar (if configured), and Add to Google Calendar links.
-- **AI Study Buddy, AI Search, and Creator Studio drafting** use Groq's `openai/gpt-oss-20b`; AI Search enables the built-in browser search tool. Search results and AI answers can still be incomplete or wrong. [Groq model and browser search docs](https://console.groq.com/docs/tool-use/built-in-tools/browser-search).
-- Groq's free plan is rate-limited. Because every student shares this app's API key, a public app can use up its free quota; check the current limits before sharing widely. [Groq rate limits](https://console.groq.com/docs/rate-limits).
+- **AI Study Buddy, AI Search, and Creator Studio text drafting** use Gemini first and Cloudflare Workers AI as a free-tier backup. AI Search uses model knowledge, not live web search, and answers can be wrong or out of date. Check current claims with trusted sources.
+- Free tiers have limits shared by all students. Cloudflare Workers Free includes 10,000 Neurons a day; after the limit, requests stop. Do not move the Cloudflare account to Workers Paid if you need to avoid charges. [Cloudflare pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/), [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing).
 - Feedback is the final page in the student navigation and ends with the campus creator's name/sign on the lower right. Every non-home page has a Back to home button.
 - Click the hanging bulb at top-right to cycle through seven color themes: White, Dark, Blue, Purple, Amber, Rose, and Teal. The current theme name appears below the bulb.
 - The student sidebar uses a theme-aware vertical icon-card menu. Each page is a separate menu item, and the current page is highlighted.
