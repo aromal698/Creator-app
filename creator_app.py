@@ -19,6 +19,7 @@ from supabase import create_client
 
 
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other", "Cross-department"]
+FREE_CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
 THEMES = [
     {"name": "White", "bg": "#f7faf8", "side": "#edf3ef", "surface": "#ffffff", "text": "#172b27", "muted": "#526861", "accent": "#176b5b", "soft": "#e3f1e8", "border": "#d2e3d8"},
     {"name": "Dark", "bg": "#101820", "side": "#17242d", "surface": "#1c2a34", "text": "#edf5f7", "muted": "#b3c4cb", "accent": "#59c3a5", "soft": "#203a3b", "border": "#35515a"},
@@ -112,44 +113,77 @@ def creator_sign_out():
     st.session_state.creator_page = "Creator dashboard"
 
 
-def groq_generate_text(system_prompt, user_prompt):
-    api_key = str(secret("GROQ_API_KEY", "")).strip()
-    if not api_key:
-        return None
-    response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": secret("GROQ_MODEL", "openai/gpt-oss-20b"),
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "max_completion_tokens": 900,
-            "reasoning_effort": "low",
-        },
-        timeout=60,
-    )
-    try:
-        result = response.json()
-    except ValueError:
-        result = {}
-    if not response.ok:
-        error = result.get("error", {}) if isinstance(result, dict) else {}
-        message = error.get("message", response.text[:400]) if isinstance(error, dict) else str(error)
-        raise RuntimeError(f"Groq API returned HTTP {response.status_code}: {message}")
-    return result["choices"][0]["message"].get("content", "")
+def gemini_generate_text(system_prompt, user_prompt):
+    """Try free Gemini, then free-tier Cloudflare Workers AI for creator text."""
+    gemini_key = str(secret("GEMINI_API_KEY", "")).strip()
+    failures = []
+    if gemini_key:
+        try:
+            response = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{secret('GEMINI_MODEL', 'gemini-3.5-flash-lite')}:generateContent",
+                headers={"x-goog-api-key": gemini_key, "Content-Type": "application/json"},
+                json={
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "generationConfig": {"temperature": 0.4, "maxOutputTokens": 900},
+                },
+                timeout=60,
+            )
+            result = response.json()
+            if not response.ok:
+                message = result.get("error", {}).get("message", response.text[:400])
+                raise RuntimeError(f"Gemini API returned HTTP {response.status_code}: {message}")
+            parts = result["candidates"][0]["content"]["parts"]
+            text = "".join(part.get("text", "") for part in parts if isinstance(part, dict)).strip()
+            if text:
+                return text
+            raise RuntimeError("Gemini returned no text.")
+        except Exception as exc:
+            failures.append(f"Gemini: {str(exc)[:250]}")
+
+    account_id = str(secret("CLOUDFLARE_ACCOUNT_ID", "")).strip()
+    api_token = str(secret("CLOUDFLARE_API_TOKEN", "")).strip()
+    if account_id and api_token:
+        try:
+            model = str(secret("CLOUDFLARE_MODEL", FREE_CLOUDFLARE_MODEL)).strip()
+            if model != FREE_CLOUDFLARE_MODEL:
+                raise RuntimeError(f"Free-only mode allows only {FREE_CLOUDFLARE_MODEL} on Workers Free.")
+            endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{quote(model, safe='@/-')}"
+            response = requests.post(
+                endpoint,
+                headers={"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"},
+                json={
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": 900,
+                    "temperature": 0.3,
+                },
+                timeout=90,
+            )
+            result = response.json()
+            output = result.get("result", {}) if isinstance(result, dict) else {}
+            text = str(output.get("response", "") if isinstance(output, dict) else "").strip()
+            if not response.ok or result.get("success") is False:
+                errors = result.get("errors", []) if isinstance(result, dict) else []
+                detail = errors[0].get("message", "Request failed") if errors and isinstance(errors[0], dict) else response.text[:350]
+                raise RuntimeError(f"Cloudflare Workers AI returned HTTP {response.status_code}: {detail}")
+            if text:
+                return text
+            raise RuntimeError("Cloudflare Workers AI returned no text.")
+        except Exception as exc:
+            failures.append(f"Cloudflare: {str(exc)[:250]}")
+    if failures:
+        raise RuntimeError("Both configured free AI services failed. " + " | ".join(failures))
+    raise RuntimeError("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI.")
 
 
 def ai_draft_from_poster(image_bytes, image_type, kind, title, event_day, audience, notes, language):
-    """Read a campus poster and draft an update using Groq's vision model."""
+    """Use Gemini only to read an uploaded campus poster."""
     if len(image_bytes) > 8 * 1024 * 1024:
         raise ValueError("Poster image must be smaller than 8 MB.")
-    api_key = str(secret("GROQ_API_KEY", "")).strip()
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY is missing from Creator Studio Secrets.")
     encoded = base64.b64encode(image_bytes).decode("ascii")
-    data_url = f"data:{image_type};base64,{encoded}"
     prompt = (
         f"Read the attached event poster and prepare a campus {kind.lower()} for B.Tech students. "
         "Extract only event facts that are visibly written in the poster or given in the form. "
@@ -158,31 +192,25 @@ def ai_draft_from_poster(image_bytes, image_type, kind, title, event_day, audien
         f"Write in {language}; for Manglish use English/Latin letters for Malayalam. "
         "Return exactly two sections: EVENT_TITLE: followed by a concise title; then DRAFT: followed by the proposed notice/activity text."
     )
+    gemini_key = str(secret("GEMINI_API_KEY", "")).strip()
+    if not gemini_key:
+        raise RuntimeError("Add GEMINI_API_KEY to Creator Studio Secrets to use poster AI.")
     response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": secret("GROQ_VISION_MODEL", "qwen/qwen3.8-27b"),
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            }],
-            "max_completion_tokens": 900,
-        },
+        f"https://generativelanguage.googleapis.com/v1beta/models/{secret('GEMINI_MODEL', 'gemini-3.5-flash-lite')}:generateContent",
+        headers={"x-goog-api-key": gemini_key, "Content-Type": "application/json"},
+        json={"contents": [{"role": "user", "parts": [
+            {"text": prompt}, {"inline_data": {"mime_type": image_type, "data": encoded}},
+        ]}], "generationConfig": {"temperature": 0.2, "maxOutputTokens": 900}},
         timeout=90,
     )
-    try:
-        result = response.json()
-    except ValueError:
-        result = {}
+    result = response.json()
     if not response.ok:
-        error = result.get("error", {}) if isinstance(result, dict) else {}
-        message = error.get("message", response.text[:400]) if isinstance(error, dict) else str(error)
-        raise RuntimeError(f"Poster AI returned HTTP {response.status_code}: {message}")
-    return result["choices"][0]["message"].get("content", "")
+        message = result.get("error", {}).get("message", response.text[:400])
+        raise RuntimeError(f"Gemini poster AI returned HTTP {response.status_code}: {message}")
+    return "".join(
+        part.get("text", "") for part in result["candidates"][0]["content"]["parts"]
+        if isinstance(part, dict)
+    ).strip()
 
 
 def unpack_poster_draft(answer):
@@ -311,7 +339,7 @@ def upload_new_poster_asset(kind, title, event_day, audience, details, backgroun
 
 
 def ai_draft(kind, title, event_day, audience, notes, language):
-    return groq_generate_text(
+    return gemini_generate_text(
         f"Draft a clear, concise campus {kind.lower()} for B.Tech students. Use only the provided facts. "
         "Do not invent time, venue, fees, links, contact details, or organizers; add [creator: add details] where missing. "
         "Use a friendly and professional tone. Return only the draft. "
@@ -322,7 +350,7 @@ def ai_draft(kind, title, event_day, audience, notes, language):
 
 
 def ai_group_description(name, department, semester, language):
-    return groq_generate_text(
+    return gemini_generate_text(
         "Write a friendly one or two sentence purpose for a student study/chat group. "
         "Do not invent campus-specific facts, dates, links, or promises. Return only the description. "
         f"Write in {language}. For Manglish, write Malayalam using English/Latin letters, not Malayalam script.",
@@ -524,28 +552,28 @@ elif page == "Manage notices & activities":
         event_day = st.date_input("Date", value=today, key="new_date")
         audience = st.selectbox("Audience", ["All departments", *DEPARTMENTS], key="new_audience")
         notes = st.text_input("Confirmed facts for AI", key="new_notes", placeholder="Time, venue, registration, organizer/contact")
-        if st.button("✨ Draft with free AI", disabled=not title.strip(), key="new_ai_draft"):
+        if st.button("✨ Draft with AI", disabled=not title.strip(), key="new_ai_draft"):
             try:
                 draft = ai_draft(kind, title.strip(), event_day.isoformat(), audience, notes.strip(), creator_ai_language)
                 if draft:
                     st.session_state.new_post_body = draft
                     st.rerun()
                 else:
-                    st.warning("Add GROQ_API_KEY to Creator Studio Secrets to use AI drafting.")
+                    st.warning("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI drafting.")
             except Exception as exc:
                 st.error(f"AI could not draft this update: {str(exc)[:400]}. You can write it manually.")
         poster = st.file_uploader(
             "Or upload an event poster for AI to read",
             type=["png", "jpg", "jpeg", "webp"],
             key="new_event_poster",
-            help="The image is sent to Groq to extract event details. It is not saved to the student app.",
+            help="After you confirm below, this image is sent to Gemini to extract event details. It is not saved to the student app.",
         )
         if poster:
             st.image(poster, caption="Poster selected for AI reading", use_container_width=True)
         if poster and poster.size > 8 * 1024 * 1024:
             st.warning("Please use a poster image smaller than 8 MB.")
         poster_cost_ack = st.checkbox(
-            "I understand poster-reading AI may use paid Groq model access or incur usage charges.",
+            "I understand poster-reading sends this image to Gemini. Gemini free-tier usage limits apply.",
             key="poster_cost_ack",
         )
         if st.button("🖼️ Read poster and create AI draft", disabled=not poster or poster.size > 8 * 1024 * 1024 or not poster_cost_ack, key="poster_ai_draft"):
@@ -693,14 +721,14 @@ elif page == "Manage notices & activities":
             edit_date = st.date_input("Date", value=edit_date_default, key=f"edit_date_{selected_id}")
             edit_audience = st.selectbox("Audience", ["All departments", *DEPARTMENTS], index=( ["All departments", *DEPARTMENTS].index(item["audience"]) if item["audience"] in ["All departments", *DEPARTMENTS] else 0), key=f"edit_audience_{selected_id}")
             edit_notes = st.text_input("Extra confirmed facts for an AI rewrite", key=f"edit_notes_{selected_id}")
-            if st.button("✨ Rewrite draft with free AI", key=f"edit_ai_{selected_id}"):
+            if st.button("✨ Rewrite draft with AI", key=f"edit_ai_{selected_id}"):
                 try:
                     draft = ai_draft(edit_kind, edit_title, edit_date.isoformat(), edit_audience, edit_notes, creator_ai_language)
                     if draft:
                         st.session_state[body_key] = draft
                         st.rerun()
                     else:
-                        st.warning("Add GROQ_API_KEY to Creator Studio Secrets to use AI drafting.")
+                        st.warning("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI drafting.")
                 except Exception as exc:
                     st.error(f"AI could not rewrite this update: {str(exc)[:400]}. You can edit it manually.")
             edit_body = st.text_area("Review and edit text", value=item["body"], key=body_key, height=180)
@@ -835,14 +863,14 @@ elif page == "Group admin":
         department = c1.selectbox("Department", DEPARTMENTS, key="admin_group_department")
         semester = c2.selectbox("Semester", ["Any semester", *range(1, 9)], key="admin_group_semester")
         make_private = st.checkbox("Private group — students need my invite code to join", key="admin_group_private")
-        if st.button("✨ Suggest group purpose with free AI", disabled=not name.strip()):
+        if st.button("✨ Suggest group purpose with AI", disabled=not name.strip()):
             try:
                 suggestion = ai_group_description(name.strip(), department, semester, creator_ai_language)
                 if suggestion:
                     st.session_state.admin_group_description = suggestion
                     st.rerun()
                 else:
-                    st.warning("Add GROQ_API_KEY to Creator Studio Secrets to use AI.")
+                    st.warning("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI.")
             except Exception as exc:
                 st.error(f"AI could not suggest a group purpose: {str(exc)[:400]}. You can still write one yourself.")
         if st.button("Create active group", type="primary", disabled=not name.strip()):
@@ -937,7 +965,7 @@ elif page == "Group admin":
                         st.session_state[g_desc_key] = suggestion
                         st.rerun()
                     else:
-                        st.warning("Add GROQ_API_KEY to Creator Studio Secrets to use AI.")
+                        st.warning("Add Gemini or Cloudflare Workers AI credentials to Creator Studio Secrets to use AI.")
                 except Exception as exc:
                     st.error(f"AI could not rewrite this description: {str(exc)[:400]}.")
             g_desc = st.text_area("Description", value=group.get("description") or "", key=g_desc_key)
