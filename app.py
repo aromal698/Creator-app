@@ -957,7 +957,11 @@ if st.session_state.get("show_student_manual", False):
             st.markdown("**5. AI help**  \nOpen **AI Study Buddy** or **AI Search**. Pick English, Malayalam, or Manglish where the language choice is shown.")
             st.markdown("**6. Feedback**  \nOpen **Feedback**, write your message, then choose **Send feedback**.")
 
-name = display_name.strip() or "Student"
+name = str(
+    st.session_state.get("display_name")
+    or user_metadata.get("display_name")
+    or "Student"
+).strip() or "Student"
 if daily_choice == "yellow":
     show_snowfall()
 
