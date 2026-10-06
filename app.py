@@ -20,11 +20,11 @@ from supabase import create_client
 
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other"]
 SEMESTERS = list(range(1, 9))
-NAV_PAGES = ["Home", "Student Profile", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "Feedback"]
+NAV_PAGES = ["Home", "Campus Bot", "Student Profile", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "Feedback"]
 FREE_CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
 FREE_GROQ_MODEL = "openai/gpt-oss-20b"
 NAV_PAGE_ICONS = {
-    "Home": "⌂", "Student Profile": "👤", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
+    "Home": "⌂", "Campus Bot": "🤖", "Student Profile": "👤", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
     "Campus Calendar": "📅", "Campus Activities": "🎪", "Notices": "📌",
     "AI Study Buddy": "✨", "AI Search": "🔎", "Feedback": "💡",
 }
@@ -193,6 +193,14 @@ def go_home():
 
 def open_student_profile():
     st.session_state.nav_page = "Student Profile"
+
+
+def open_student_ai_buddy():
+    st.session_state.nav_page = "AI Study Buddy"
+
+
+def open_student_campus_bot():
+    st.session_state.nav_page = "Campus Bot"
 
 
 def toggle_student_manual():
@@ -953,9 +961,9 @@ if st.session_state.get("show_student_manual", False):
             st.markdown("**2. Join a group**  \nChoose **Study Groups**. Join a public group, or enter a private code from the creator. Joining opens the chat.")
             st.markdown("**3. Group chat**  \nSend a message, photo, camera picture, or emoji. You can delete your own selected messages.")
         with manual_right:
-            st.markdown("**4. Home and calendar**  \nFind campus notices, activities, today's special, and WhatsApp links on **Home**. Open **Campus Calendar** for event dates.")
-            st.markdown("**5. AI help**  \nOpen **AI Study Buddy** or **AI Search**. Pick English, Malayalam, or Manglish where the language choice is shown.")
-            st.markdown("**6. Feedback**  \nOpen **Feedback**, write your message, then choose **Send feedback**.")
+            st.markdown("**4. Campus Bot**  \nOpen **Campus Bot** to navigate the student app, find/join a public group, change the theme, or choose a daily alert. The bot asks before actions that change your account or group membership.")
+            st.markdown("**5. Home and calendar**  \nFind campus notices, activities, today's special, and WhatsApp links on **Home**. Open **Campus Calendar** for event dates.")
+            st.markdown("**6. Study help and feedback**  \nUse **AI Study Buddy** for subject explanations, **AI Search** for general questions, or **Feedback** to send a suggestion.")
 
 name = str(
     st.session_state.get("display_name")
@@ -965,7 +973,137 @@ name = str(
 if daily_choice == "yellow":
     show_snowfall()
 
-if page == "Student Profile":
+if page == "Campus Bot":
+    st.caption("This bot controls student-app navigation and selected actions. It asks before joining a group, using today's alert, or signing out. Type what you want it to do.")
+    st.info("Examples: **Open notices**, **show activities**, **go to my profile**, **join Robotics group**, **open group chat**, **message the creator**, **change theme to blue**, or **choose the red alert**.")
+    bot_messages = st.session_state.setdefault("campus_bot_messages", [])
+    for bot_message in bot_messages[-16:]:
+        with st.chat_message(bot_message["role"]):
+            st.markdown(bot_message["content"])
+
+    bot_command = st.chat_input("Tell Campus Bot what you want to do…", key="campus_bot_command")
+    if bot_command:
+        bot_messages.append({"role": "user", "content": bot_command})
+        command = re.sub(r"\s+", " ", bot_command.strip().lower())
+        response_text = ""
+        if any(word in command for word in ("sign out", "log out", "logout")):
+            st.session_state.campus_bot_pending_action = {"kind": "sign_out"}
+            response_text = "I can sign you out. Confirm below if you want to end this session."
+        elif "join" in command and "group" in command:
+            try:
+                active_groups = client.table("campus_groups").select("id,name,is_private,is_active").eq("is_active", True).execute().data or []
+                query_name = re.sub(r"\b(please|can you|could you|join|the|a|an|group|study|chat|for me)\b", " ", command)
+                query_name = re.sub(r"\s+", " ", query_name).strip()
+                matches = [group for group in active_groups if query_name and query_name in str(group.get("name", "")).lower()]
+                if len(matches) == 1:
+                    group = matches[0]
+                    if group.get("is_private"):
+                        st.session_state.nav_page = "Study Groups"
+                        response_text = f"**{group['name']}** is private. Open **Study Groups → Join with code** and enter the invite code from its creator. I can't bypass the code."
+                    else:
+                        already_joined = client.table("group_members").select("group_id").eq("group_id", group["id"]).eq("user_id", uid).limit(1).execute().data or []
+                        if already_joined:
+                            st.session_state.active_group_id = group["id"]
+                            st.session_state.nav_page = "Group Chat"
+                            response_text = f"You already joined **{group['name']}**. Opening its chat."
+                        else:
+                            st.session_state.campus_bot_pending_action = {"kind": "join_group", "group_id": group["id"], "group_name": group["name"]}
+                            response_text = f"I found **{group['name']}**. Confirm below to join and open its chat."
+                elif len(matches) > 1:
+                    response_text = "I found more than one matching group. Type the full group name after ‘join group’."
+                else:
+                    st.session_state.nav_page = "Study Groups"
+                    response_text = "I couldn't find that group name. The Study Groups page is open; you can browse groups or use the creator's code for a private group."
+            except Exception:
+                response_text = "I couldn't load the groups just now. Open Study Groups and try again."
+        elif any(term in command for term in ("red alert", "yellow alert", "green alert", "choose red", "choose yellow", "choose green")):
+            choice = "red" if "red" in command else "yellow" if "yellow" in command else "green"
+            if daily_choice:
+                response_text = "You have already used today's alert. You can choose again tomorrow."
+            else:
+                st.session_state.campus_bot_pending_action = {"kind": "daily_alert", "choice": choice}
+                response_text = f"Confirm below to choose the {choice} alert for today. You can choose only once per day."
+        elif "theme" in command or "colour" in command or "color" in command:
+            selected_theme = next((i for i, theme_item in enumerate(THEMES) if theme_item["name"].lower() in command), None)
+            if selected_theme is None:
+                selected_theme = (int(st.session_state.get("theme_index", 0)) + 1) % len(THEMES)
+            st.session_state.theme_index = selected_theme
+            response_text = f"Theme changed to **{THEMES[selected_theme]['name']}**."
+        else:
+            page_aliases = [
+                (("profile", "my details", "my account"), "Student Profile"),
+                (("notice", "announcements"), "Notices"),
+                (("activity", "activities", "events"), "Campus Activities"),
+                (("calendar", "special day"), "Campus Calendar"),
+                (("creator chat", "message creator", "chat with creator"), "Chat with Creator"),
+                (("group chat", "my chats", "open chat"), "Group Chat"),
+                (("study group", "groups", "create group", "join with code"), "Study Groups"),
+                (("ai search", "search anything"), "AI Search"),
+                (("study buddy", "subject help"), "AI Study Buddy"),
+                (("feedback", "send feedback"), "Feedback"),
+                (("whatsapp", "community link", "channel link"), "Home"),
+                (("home", "dashboard"), "Home"),
+            ]
+            target_page = next((page_name for aliases, page_name in page_aliases if any(alias in command for alias in aliases)), None)
+            if target_page:
+                st.session_state.nav_page = target_page
+                response_text = f"Opening **{target_page}**."
+            else:
+                response_text = "I can open Home, your profile, study groups, group chat, creator chat, calendar, activities, notices, AI Study Buddy, AI Search, or Feedback. I can also join a named public group, change the theme, choose a daily alert, or sign you out after confirmation."
+
+        bot_messages.append({"role": "assistant", "content": response_text})
+        st.rerun()
+
+    pending_bot_action = st.session_state.get("campus_bot_pending_action")
+    if pending_bot_action:
+        st.divider()
+        if pending_bot_action["kind"] == "join_group":
+            group_name = pending_bot_action["group_name"]
+            st.write(f"Join **{group_name}** and open its chat?")
+            confirm_col, cancel_col = st.columns(2)
+            if confirm_col.button("Confirm join", key="campus_bot_confirm_join", type="primary", use_container_width=True):
+                group_id = pending_bot_action["group_id"]
+                st.session_state.pop("campus_bot_pending_action", None)
+                join_group_callback(group_id)
+                st.rerun()
+            if cancel_col.button("Cancel", key="campus_bot_cancel_join", use_container_width=True):
+                st.session_state.pop("campus_bot_pending_action", None)
+                st.rerun()
+        elif pending_bot_action["kind"] == "daily_alert":
+            choice = pending_bot_action["choice"]
+            labels = {"red": "🔴 red · private chat with creator", "yellow": "🟡 yellow · snowfall", "green": "🟢 green · ₹5 in-app credit"}
+            st.write(f"Use {labels[choice]} today?")
+            confirm_col, cancel_col = st.columns(2)
+            if confirm_col.button("Confirm today's alert", key="campus_bot_confirm_alert", type="primary", use_container_width=True):
+                try:
+                    client.table("student_daily_choices").insert({"user_id": uid, "choice_date": today_iso, "choice": choice}).execute()
+                    st.session_state.pop("campus_bot_pending_action", None)
+                    if choice == "red":
+                        st.session_state.nav_page = "Chat with Creator"
+                    else:
+                        st.session_state.nav_page = "Home"
+                    st.rerun()
+                except Exception:
+                    st.error("Today's alert could not be saved. It may already have been used today.")
+            if cancel_col.button("Cancel", key="campus_bot_cancel_alert", use_container_width=True):
+                st.session_state.pop("campus_bot_pending_action", None)
+                st.rerun()
+        elif pending_bot_action["kind"] == "sign_out":
+            st.write("Sign out of this student profile?")
+            confirm_col, cancel_col = st.columns(2)
+            if confirm_col.button("Confirm sign out", key="campus_bot_confirm_sign_out", type="primary", use_container_width=True):
+                try:
+                    client.auth.sign_out()
+                except Exception:
+                    pass
+                clear_login()
+                st.session_state.pop("campus_bot_pending_action", None)
+                st.rerun()
+            if cancel_col.button("Stay signed in", key="campus_bot_cancel_sign_out", use_container_width=True):
+                st.session_state.pop("campus_bot_pending_action", None)
+                st.rerun()
+
+elif page == "Student Profile":
     st.markdown("### Your CampusConnect profile")
     if is_temporary_user:
         st.warning("This is an older temporary profile. It is not linked to registration-number sign-in. Sign out and create a registration-number profile to make future sign-ins work.")
@@ -1006,6 +1144,13 @@ elif page == "Home":
             wa_links[2].link_button("Share this app", app_share_link, use_container_width=True)
         else:
             wa_links[2].caption("App share link not set yet")
+    with st.container(border=True):
+        bot_home_left, bot_home_right = st.columns([4, 1])
+        with bot_home_left:
+            st.markdown("#### 🤖 Campus Bot")
+            st.caption("Tell the bot what you want to do: open notices, find or join a group, open a chat, go to your profile, change the theme, or choose today's alert.")
+        with bot_home_right:
+            st.button("Open Campus Bot →", key="home_open_campus_bot", type="primary", on_click=open_student_campus_bot, use_container_width=True)
     try:
         all_posts = client.table("campus_posts").select("*").eq("status", "published").order("event_date").execute().data or []
         groups = client.table("campus_groups").select("id").eq("is_active", True).execute().data or []
