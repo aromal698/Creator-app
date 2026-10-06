@@ -2,8 +2,8 @@
 
 A two-app Streamlit campus community for B.Tech students. Both apps use one Supabase database.
 
-- `app.py` — student app: direct Home access with anonymous Supabase sessions and profiles, department and semester groups, WhatsApp-style chat with photo/camera and emoji support, daily red/yellow/green alerts, private creator chat, campus updates, calendar, and AI study tools.
-- `creator_app.py` — Creator Studio sign-in asks for a creator name and the shared creator password; it includes campus post tools, group administration, private student inbox, and page-view totals.
+- `app.py` — student app: registration-number/password profiles, department and semester groups, WhatsApp-style chat with photo/camera and emoji support, daily red/yellow/green alerts, private creator chat, campus updates, calendar, and AI study tools.
+- `creator_app.py` — Creator Studio sign-in asks for a creator name and the shared creator password; it includes an AI Admin Assistant for drafting notices, activities, special-day highlights, and study groups, plus campus post tools, group administration, private student inbox, and page-view totals.
 - `supabase_schema.sql` — shared database setup, including public and code-protected private groups, chats, daily choices, private creator inbox, page views, and private group-photo storage.
 - `.streamlit/secrets.toml.example` — example settings only. Never put real keys in this file or GitHub.
 
@@ -15,8 +15,8 @@ Student pages show published campus content. Creator drafts and edit controls re
 2. In the project, open **SQL Editor → New query**.
 3. Open `supabase_schema.sql`, copy its full contents, paste into the SQL Editor, and click **Run**. This creates groups for the listed departments and semesters 1–8, chats, daily alerts, a private creator inbox, page-view counts, storage buckets, and access policies.
    If the database already exists, run the updated SQL again. It adds missing columns/tables and refreshes policies without deleting existing posts or messages.
-4. In Supabase **Authentication** settings, enable **Anonymous Sign-Ins**. The student app needs this so students can enter without an email/password screen while database access remains tied to a private Supabase user ID. Email confirmation is not used by the student app.
-5. Students enter the Home dashboard, then save their registration number, name, department, and semester in the sidebar profile form. Anonymous profiles cannot be recovered after a browser session is lost or on a different device; a registration number by itself does not prove who owns that profile. For a permanent student account, add a recoverable sign-in method later.
+4. In Supabase **Authentication → Sign In / Providers → Email**, keep email sign-ups enabled and turn **Confirm email** off. Students do not enter a real email: the app makes a private internal email identity from the registration number and uses it with the student's password. No confirmation email is sent. Supabase Auth and row-level security continue to protect student data.
+5. Students create a profile with registration number, password, name, department, and semester. On later visits they sign in with the same registration number and password to return to that profile. Since no real email is collected, a forgotten password cannot be reset by email; students must keep it safe. Registration numbers are treated as case-insensitive.
 6. Find the project URL and publishable/anon key in the Supabase API key settings. Keep the service-role/secret key for the server-side Creator Studio only.
 
 ## 2. Create a public campus Google Calendar (optional)
@@ -36,7 +36,7 @@ Create your WhatsApp Community and Channel, then copy their invite/share URLs. I
 
 ## 4. Student profile, page views, and notice posters
 
-- Students open Home without an email/password form. Their registration number, name, department, and semester are saved in the current anonymous Supabase profile. A lost anonymous session cannot be recovered using only the registration number.
+- Students create a profile with registration number, password, name, department, and semester. On later visits, they sign in with the same registration number and password. The app converts the registration number into a private internal Supabase Auth email; students do not enter or receive email. Keep **Email sign-ups enabled** and **Confirm email off** in Supabase Auth. Old anonymous or real-email accounts do not automatically become registration-number accounts: the student must create a new profile once using the new **Create profile** tab. Old account data is not automatically transferred.
 - A small red/yellow/green alert panel appears near the top right of student pages. Students can choose once per day: red opens a private chat with the creator, yellow shows snowfall, and green adds ₹5 of in-app credit. This is not a cash payment.
 - Group chat photos and camera pictures are stored in a private bucket. Only members of the matching group can view them. Emoji and captions can also be sent. Select one or more of your own messages and use **Delete selected** to remove them; other students' messages cannot be selected or deleted by you.
 - The Creator Studio **Student inbox** page receives and replies to the private chats started by students.
@@ -115,7 +115,7 @@ The Creator Studio password is shared in this starter version. Anyone who has it
 
 ## 9. Use CampusConnect
 
-- Students open the Home dashboard directly. The app silently creates a Supabase anonymous session, then asks for registration number, name, department, and semester in the sidebar. The alert choices are at the top-right of the student page. Anonymous profiles are temporary identities; if a student loses the browser session or changes device, a registration number alone cannot recover the same identity.
+- Students first select **Create profile** and save their registration number, password, name, department, and semester. Later they use **Sign in** with that same registration number and password. No confirmation email is used. If a registration number was first used with the older anonymous/real-email login version, create a profile once through the new form; old profile data is separate and is not transferred. Tap the round student icon at the top of the sidebar to open **Student Profile**. The alert choices are at the top-right of the student page.
 - Students get a separate seeded chat group for each department and semester (for example, CSE · Semester 3). The Study Groups page starts filtered to the student's own department and semester; students can also browse other groups or create a new group. Joining opens that group's chat.
 - The creator makes private groups in **Creator Studio → Group admin** and shares the generated invite code with selected students. The database stores only a hash of the code. If a code is lost, choose **Manage groups and members → Generate / replace invite code**; this invalidates the previous code but keeps current members. Students join through **Study Groups → Join with code**; a successful join opens that group's chat. Private groups stay hidden from students who have not joined. Students can create public groups only.
 - The student Home page puts the important notice and all published campus notices near the top; notices are arranged in three columns. It shows today's activities and creator-highlighted special days from the campus calendar, and generates a daily AI study thought in English and Malayalam. The AI summary only uses events the creator marked as special.
@@ -125,6 +125,7 @@ The Creator Studio password is shared in this starter version. Anyone who has it
 - Feedback is the final page in the student navigation and ends with the campus creator's name/sign on the lower right. Every non-home page has a Back to home button.
 - Click the hanging bulb at top-right to cycle through seven color themes: White, Dark, Blue, Purple, Amber, Rose, and Teal. The current theme name appears below the bulb.
 - The student sidebar uses a theme-aware vertical icon-card menu. Each page is a separate menu item, and the current page is highlighted.
+- In Creator Studio, open **AI Admin Assistant** from the left menu or the dashboard button. Choose Notice, Activity, Study group, or Ask an admin question. Give it confirmed details, choose English, Malayalam, or Manglish in the sidebar, and select the configured AI provider. Review the draft and open the matching editor to save or publish it yourself. For calendar special days, mark the activity as a special day in the assistant or calendar editor. The AI cannot independently publish, edit, or delete database records.
 - Set the public student app URL and creator name in **Creator Studio → Campus links**. Students can then share the app through WhatsApp.
 
 Before a campus-wide launch, choose an identity method that students can recover, protect Creator Studio credentials, review the access policies, and try the apps with separate student accounts. Never put private information in a public calendar or AI prompt.
