@@ -20,11 +20,11 @@ from supabase import create_client
 
 DEPARTMENTS = ["CSE", "IT", "ECE", "EEE", "Mechanical", "Civil", "Chemical", "Biotechnology", "Other"]
 SEMESTERS = list(range(1, 9))
-NAV_PAGES = ["Home", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "Feedback"]
+NAV_PAGES = ["Home", "Student Profile", "Study Groups", "Group Chat", "Chat with Creator", "Campus Calendar", "Campus Activities", "Notices", "AI Study Buddy", "AI Search", "Feedback"]
 FREE_CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
 FREE_GROQ_MODEL = "openai/gpt-oss-20b"
 NAV_PAGE_ICONS = {
-    "Home": "⌂", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
+    "Home": "⌂", "Student Profile": "👤", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
     "Campus Calendar": "📅", "Campus Activities": "🎪", "Notices": "📌",
     "AI Study Buddy": "✨", "AI Search": "🔎", "Feedback": "💡",
 }
@@ -73,6 +73,92 @@ def save_auth_response(response, default_name=""):
     return True
 
 
+def student_auth_email(registration_number):
+    """Create a private, stable Supabase email identity from the student's reg number."""
+    normalized = str(registration_number or "").strip().upper()
+    if not normalized:
+        raise ValueError("Enter your registration number.")
+    identity_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"student-{identity_hash}@campusconnect.invalid"
+
+
+def render_student_access_screen(client):
+    st.markdown("<div class='eyebrow'>B.TECH STUDENT COMMUNITY</div>", unsafe_allow_html=True)
+    st.title("Welcome to CampusConnect")
+    st.write("Sign in with your registration number and password, or create your student profile.")
+    st.info("CampusConnect does not ask for or send a real email. Choose a password you can remember; password recovery by email is not available.")
+    sign_in_tab, create_tab = st.tabs(["Sign in", "Create profile"])
+    with sign_in_tab:
+        with st.form("student_sign_in_form"):
+            login_registration = st.text_input("Registration number", key="login_registration_number")
+            login_password = st.text_input("Password", type="password", key="login_password")
+            login_submit = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+        if login_submit:
+            if not login_registration.strip() or not login_password:
+                st.warning("Enter your registration number and password.")
+            else:
+                try:
+                    response = client.auth.sign_in_with_password({
+                        "email": student_auth_email(login_registration),
+                        "password": login_password,
+                    })
+                    if save_auth_response(response):
+                        st.rerun()
+                    st.error("CampusConnect could not start your session. Try again.")
+                except Exception as sign_in_error:
+                    detail = str(sign_in_error).lower()
+                    if "invalid login credentials" in detail or "invalid_grant" in detail:
+                        st.error("That registration number and password were not found. If you used an older login method, select **Create profile** once to make a profile for this new sign-in system. After that, use the same registration number and password here.")
+                    elif "email not confirmed" in detail or "email_not_confirmed" in detail:
+                        st.error("Supabase is still asking for email confirmation. In Supabase, turn off **Confirm email** under Authentication → Sign In / Providers → Email, then try creating the profile again.")
+                    else:
+                        st.error("Sign-in could not be completed. Check the registration number and password. If this is your first time with registration-number sign-in, use **Create profile** once. If it still fails, check the Supabase URL/key and Auth settings in Streamlit Secrets.")
+    with create_tab:
+        with st.form("student_create_profile_form"):
+            create_registration = st.text_input("Registration number", key="create_registration_number")
+            create_password = st.text_input("Create a password (at least 8 characters)", type="password", key="create_password")
+            confirm_password = st.text_input("Confirm password", type="password", key="confirm_create_password")
+            create_name = st.text_input("Your name", key="create_display_name")
+            create_department = st.selectbox("Department", DEPARTMENTS, key="create_department")
+            create_semester = st.selectbox("Class / semester", SEMESTERS, key="create_semester")
+            create_submit = st.form_submit_button("Create profile", type="primary", use_container_width=True)
+        if create_submit:
+            if not create_registration.strip() or not create_name.strip():
+                st.warning("Enter your registration number and name.")
+            elif len(create_password) < 8:
+                st.warning("Choose a password with at least 8 characters.")
+            elif create_password != confirm_password:
+                st.warning("The two passwords do not match.")
+            else:
+                profile_data = {
+                    "registration_number": create_registration.strip().upper(),
+                    "display_name": create_name.strip(),
+                    "department": create_department,
+                    "semester": create_semester,
+                }
+                try:
+                    response = client.auth.sign_up({
+                        "email": student_auth_email(create_registration),
+                        "password": create_password,
+                        "options": {"data": profile_data},
+                    })
+                    if save_auth_response(response, create_name.strip()):
+                        st.session_state.student_registration_number = profile_data["registration_number"]
+                        st.session_state.profile_department = create_department
+                        st.session_state.profile_semester = create_semester
+                        st.success("Your profile is ready.")
+                        st.rerun()
+                    st.error("Turn off Confirm email in Supabase Authentication settings, then create your profile again.")
+                except Exception as signup_error:
+                    detail = str(signup_error).lower()
+                    if "already registered" in detail or "already been registered" in detail:
+                        st.error("A profile already uses this registration number. Sign in with its password instead.")
+                    elif "email not confirmed" in detail or "email_not_confirmed" in detail:
+                        st.error("Supabase is asking for email confirmation. Turn off **Confirm email** under Supabase Authentication → Sign In / Providers → Email, then try again.")
+                    else:
+                        st.error("CampusConnect could not create the profile. Check that Supabase email sign-up is enabled, Confirm email is off, and the student app has the correct Supabase project URL and publishable/anon key in its Secrets.")
+
+
 def get_authenticated_client():
     url = secret("SUPABASE_URL")
     public_key = secret("SUPABASE_ANON_KEY") or secret("SUPABASE_PUBLISHABLE_KEY")
@@ -85,19 +171,7 @@ def get_authenticated_client():
     access = st.session_state.get("supabase_access_token")
     refresh = st.session_state.get("supabase_refresh_token")
     if not access or not refresh:
-        # Give students a direct-entry experience without exposing an email/password
-        # screen. Supabase still issues a private user ID so the existing RLS rules
-        # continue to protect group chats and student actions.
-        try:
-            response = client.auth.sign_in_anonymously()
-            if save_auth_response(response):
-                return get_authenticated_client()
-            return client, None, "Supabase did not create a student session. Enable anonymous sign-ins in Supabase Auth."
-        except Exception as auth_error:
-            return client, None, (
-                "CampusConnect needs anonymous sign-ins enabled in Supabase → Authentication → Sign In / Providers. "
-                f"Details: {str(auth_error)[:250]}"
-            )
+        return client, None, None
     try:
         client.auth.set_session(access, refresh)
         user_response = client.auth.get_user()
@@ -115,6 +189,10 @@ def get_authenticated_client():
 
 def go_home():
     st.session_state.nav_page = "Home"
+
+
+def open_student_profile():
+    st.session_state.nav_page = "Student Profile"
 
 
 def toggle_student_manual():
@@ -621,6 +699,7 @@ def apply_theme():
     .stApp div.stButton > button:hover,.stApp [data-testid="stFormSubmitButton"] button:hover,.stApp [data-testid="stDownloadButton"] button:hover {{ background:{theme['soft']} !important; }}
     .stApp .st-key-theme_bulb button {{ background:#fff7d9 !important; color:#704f00 !important; border-color:#d6b66a !important; }}
     .stApp .st-key-student_manual_button button {{ background:{theme['surface']} !important; color:{theme['accent']} !important; border:1px solid {theme['border']} !important; border-radius:11px !important; min-width:42px; min-height:42px; padding:0 .45rem; font-size:1.35rem; box-shadow:0 2px 8px #00000012; }}
+    .stApp [data-testid="stSidebar"] .st-key-student_profile_avatar_button button {{ width:48px; height:48px; min-height:48px; padding:0; border-radius:50%; background:{theme['accent']} !important; color:#fff !important; border:3px solid {theme['border']} !important; font-size:1.2rem; font-weight:800; box-shadow:0 3px 10px #163b2b22; }}
     .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] {{ background:{theme['surface']} !important; border:1px solid {theme['border']} !important; border-left:4px solid transparent !important; color:{theme['text']} !important; }}
     .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; }}
     .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; border-left:4px solid {theme['accent']} !important; }}
@@ -675,10 +754,14 @@ def apply_theme():
 
 apply_theme()
 client, auth_user, auth_error = get_authenticated_client()
-if not client or not auth_user:
+if not client:
     if auth_error:
         st.error(auth_error)
-        st.info("Ask the app owner to enable Supabase anonymous sign-ins. No email confirmation or student password is used on this entry screen.")
+    st.stop()
+if auth_error:
+    st.warning(auth_error)
+if not auth_user:
+    render_student_access_screen(client)
     st.stop()
 
 try:
@@ -697,6 +780,7 @@ def campus_setting(key, legacy_secret):
     return str(secret(legacy_secret, "")).strip()
 
 user_metadata = getattr(auth_user, "user_metadata", {}) or {}
+is_temporary_user = bool(getattr(auth_user, "is_anonymous", False))
 st.session_state.setdefault("student_registration_number", user_metadata.get("registration_number", ""))
 profile_ready = bool(
     user_metadata.get("registration_number")
@@ -734,63 +818,38 @@ with st.sidebar:
         profile_green_total = client.table("student_daily_choices").select("id", count="exact").eq("user_id", uid).eq("choice", "green").execute().count or 0
     except Exception:
         profile_green_total = 0
-    st.markdown(
-        f"<div class='student-profile-top'><span class='student-avatar-wrap'><span class='student-profile-avatar'>{avatar_letter}</span><span class='student-credit-badge'>₹{profile_green_total * 5}</span></span><span><b>{escape(avatar_name)}</b><br><small>Student profile · reward credit</small></span></div>",
-        unsafe_allow_html=True,
-    )
+    avatar_col, profile_label_col = st.columns([1, 4])
+    with avatar_col:
+        st.button(avatar_letter, key="student_profile_avatar_button", on_click=open_student_profile, help="Open your student profile")
+    with profile_label_col:
+        st.markdown(
+            f"<div class='student-profile-top'><b>{escape(avatar_name)}</b><br><small>Tap your picture to view profile</small><br><small>Reward credit · ₹{profile_green_total * 5}</small></div>",
+            unsafe_allow_html=True,
+        )
     st.markdown("# 🎓 CampusConnect")
     st.caption("One campus. Every department.")
-    if not profile_ready:
-        st.caption("You're already in the student dashboard. Save these details to join group chats.")
-        with st.form("student_profile_setup"):
-            profile_registration_number = st.text_input(
-                "Registration number", key="setup_registration_number", placeholder="Example: 24CSE001"
-            )
-            profile_name = st.text_input("Your name", key="setup_display_name")
-            profile_department = st.selectbox("Department", DEPARTMENTS, key="setup_department")
-            profile_semester = st.selectbox("Class / semester", SEMESTERS, key="setup_semester")
-            profile_submitted = st.form_submit_button("Save my profile", type="primary", use_container_width=True)
-        if profile_submitted:
-            if not profile_registration_number.strip() or not profile_name.strip():
-                st.warning("Enter your registration number and name.")
-            else:
-                try:
-                    client.auth.update_user({"data": {
-                        "registration_number": profile_registration_number.strip().upper(),
-                        "display_name": profile_name.strip(),
-                        "department": profile_department,
-                        "semester": profile_semester,
-                    }})
-                    st.session_state.student_registration_number = profile_registration_number.strip().upper()
-                    st.session_state.display_name = profile_name.strip()
-                    st.session_state.profile_department = profile_department
-                    st.session_state.profile_semester = profile_semester
-                    st.rerun()
-                except Exception as profile_error:
-                    st.error(f"Could not save your profile: {str(profile_error)[:250]}")
-        display_name = st.session_state.get("display_name", "")
-        department = st.session_state.get("profile_department", DEPARTMENTS[0])
-        semester = st.session_state.get("profile_semester", SEMESTERS[0])
-    else:
-        st.caption(f"Reg. no. · {st.session_state.student_registration_number}")
+    if is_temporary_user:
+        st.warning("This is an older temporary profile. Sign out, then create a registration-number-and-password profile to return later. Old temporary chats and memberships cannot be moved automatically.")
+    elif profile_ready:
+        st.caption(f"Reg. no. · {user_metadata.get('registration_number', '')}")
+        st.text_input("Registration number", value=str(user_metadata.get("registration_number", "")), disabled=True)
+        st.caption("Edit profile")
         with st.form("student_profile_edit"):
-            registration_number = st.text_input("Registration number", key="student_registration_number")
             display_name = st.text_input("Your name", key="display_name")
             department = st.selectbox("Department", DEPARTMENTS, key="profile_department")
             semester = st.selectbox("Class / semester", SEMESTERS, key="profile_semester")
             save_profile = st.form_submit_button("Save profile changes", use_container_width=True)
         if save_profile:
-            if not registration_number.strip() or not display_name.strip():
-                st.warning("Enter your registration number and name.")
+            if not display_name.strip():
+                st.warning("Enter your name.")
             else:
                 try:
                     client.auth.update_user({"data": {
-                        "registration_number": registration_number.strip().upper(),
+                        "registration_number": str(user_metadata.get("registration_number", "")),
                         "display_name": display_name.strip(),
                         "department": department,
                         "semester": semester,
                     }})
-                    st.session_state.student_registration_number = registration_number.strip().upper()
                     st.session_state.display_name = display_name.strip()
                     st.success("Your profile has been saved.")
                     st.rerun()
@@ -821,8 +880,15 @@ with st.sidebar:
         key="nav_page",
         label_visibility="collapsed",
     )
-    if profile_ready:
-        st.caption("Student profile saved on this device")
+    if profile_ready and not is_temporary_user:
+        st.caption("Your profile is protected by your registration number and password.")
+    if st.button("Sign out", use_container_width=True, key="student_sign_out"):
+        try:
+            client.auth.sign_out()
+        except Exception:
+            pass
+        clear_login()
+        st.rerun()
 
 # Store one anonymous view each time a signed-in student opens a different page.
 # No student ID, email, or message is sent to this aggregate analytics table.
@@ -895,7 +961,23 @@ name = display_name.strip() or "Student"
 if daily_choice == "yellow":
     show_snowfall()
 
-if page == "Home":
+if page == "Student Profile":
+    st.markdown("### Your CampusConnect profile")
+    if is_temporary_user:
+        st.warning("This is an older temporary profile. It is not linked to registration-number sign-in. Sign out and create a registration-number profile to make future sign-ins work.")
+    else:
+        st.write("These details belong to the account signed in with your registration number.")
+        details_left, details_right = st.columns(2)
+        with details_left:
+            st.metric("Name", user_metadata.get("display_name") or st.session_state.get("display_name", "Student"))
+            st.metric("Registration number", user_metadata.get("registration_number", "Not saved"))
+        with details_right:
+            st.metric("Department", user_metadata.get("department", "Not set"))
+            st.metric("Class / semester", user_metadata.get("semester", "Not set"))
+        st.info("To edit your name, department, or semester, use **Edit profile** in the left sidebar. Your registration number is fixed for this account.")
+        st.caption("Keep your password safe. This sign-in does not use email, so password reset by email is unavailable.")
+
+elif page == "Home":
     st.markdown(
         "<div class='hero'><h2>Good ideas grow across departments.</h2><p>Join a semester group, chat with classmates, and keep up with today's campus activities and important notices.</p></div>",
         unsafe_allow_html=True,
