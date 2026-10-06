@@ -91,8 +91,39 @@ def back_to_dashboard():
     st.session_state.creator_page = "Creator dashboard"
 
 
+def open_creator_ai_assistant():
+    st.session_state.creator_page = "AI Admin Assistant"
+
+
 def open_calendar_content():
     st.session_state.creator_page = "Manage notices & activities"
+
+
+def open_assistant_post_editor():
+    pending = st.session_state.get("creator_ai_admin_pending", {})
+    if pending.get("kind") not in ("Notice", "Activity"):
+        return
+    st.session_state.new_kind = pending["kind"]
+    st.session_state.new_title = pending["title"]
+    st.session_state.new_date = date.fromisoformat(pending["event_date"])
+    st.session_state.new_audience = pending["audience"]
+    st.session_state.new_notes = pending["facts"]
+    st.session_state.new_post_body = st.session_state.get("creator_ai_admin_review_body", "")
+    st.session_state.new_important = bool(pending.get("is_important", False))
+    st.session_state.new_special = bool(pending.get("is_special", False))
+    st.session_state.creator_page = "Manage notices & activities"
+
+
+def open_assistant_group_editor():
+    pending = st.session_state.get("creator_ai_admin_pending", {})
+    if pending.get("kind") != "Study group":
+        return
+    st.session_state.admin_group_name = pending["name"]
+    st.session_state.admin_group_description = st.session_state.get("creator_ai_admin_review_body", "")
+    st.session_state.admin_group_department = pending["department"]
+    st.session_state.admin_group_semester = pending["semester"]
+    st.session_state.admin_group_private = pending["is_private"]
+    st.session_state.creator_page = "Group admin"
 
 
 def toggle_theme():
@@ -444,7 +475,7 @@ st.sidebar.markdown("# 🛠️ Creator Studio")
 st.sidebar.caption("Private tools for campus updates and group administration.")
 page = st.sidebar.radio(
     "Admin sections",
-    ["Creator dashboard", "Student inbox", "Manage campus calendar", "Manage notices & activities", "Campus links", "Group admin"],
+    ["Creator dashboard", "AI Admin Assistant", "Student inbox", "Manage campus calendar", "Manage notices & activities", "Campus links", "Group admin"],
     key="creator_page",
     label_visibility="collapsed",
 )
@@ -516,8 +547,103 @@ if page == "Creator dashboard":
         st.info("Create or edit notices and activities in the next section. Only published items appear in the student app; drafts stay here.")
         st.info("Published activities and special days also appear in the student Campus Calendar. AI can draft or rewrite wording; review it before publishing.")
         st.info("Manage starter groups, created groups, and group availability in Group admin.")
+        st.button("✨ Open AI Admin Assistant", type="primary", on_click=open_creator_ai_assistant, use_container_width=True)
     except Exception:
         st.error("Could not load admin data. Run supabase_schema.sql and check the service key.")
+
+elif page == "AI Admin Assistant":
+    st.caption("Ask the creator AI to prepare campus updates or groups, or explain how to manage CampusConnect.")
+    st.info("The assistant prepares content and opens the matching admin form. Check every detail there, then choose Save or Publish. It will not publish, edit, or delete records on its own.")
+    assistant_task = st.selectbox(
+        "What do you want the AI to help with?",
+        ["Notice", "Activity", "Study group", "Ask an admin question"],
+        key="creator_assistant_task",
+    )
+    if assistant_task in ("Notice", "Activity"):
+        with st.form("creator_assistant_post_form"):
+            assistant_title = st.text_input("Title", key="creator_assistant_title")
+            assistant_day = st.date_input("Date", value=today, key="creator_assistant_date")
+            assistant_audience = st.selectbox("Audience", ["All departments", *DEPARTMENTS], key="creator_assistant_audience")
+            assistant_facts = st.text_area("Confirmed details for the AI", key="creator_assistant_facts", placeholder="Time, venue, contact, registration link")
+            assistant_important = st.checkbox("Pin this notice as important", key="creator_assistant_important", disabled=(assistant_task != "Notice"))
+            assistant_special = st.checkbox("Highlight this activity as a special day", key="creator_assistant_special", disabled=(assistant_task != "Activity"))
+            assistant_submit = st.form_submit_button("Prepare draft with AI", type="primary", disabled=not assistant_title.strip())
+        if assistant_submit:
+            try:
+                draft = ai_draft(assistant_task, assistant_title.strip(), assistant_day.isoformat(), assistant_audience, assistant_facts.strip(), creator_ai_language)
+                st.session_state.creator_ai_admin_pending = {
+                    "kind": assistant_task,
+                    "title": assistant_title.strip(),
+                    "event_date": assistant_day.isoformat(),
+                    "audience": assistant_audience,
+                    "facts": assistant_facts.strip(),
+                    "is_important": assistant_important,
+                    "is_special": assistant_special,
+                }
+                st.session_state.creator_ai_admin_review_body = draft
+                st.rerun()
+            except Exception as exc:
+                st.error(f"The AI could not prepare this draft: {str(exc)[:350]}")
+    elif assistant_task == "Study group":
+        with st.form("creator_assistant_group_form"):
+            assistant_group_name = st.text_input("Group name", key="creator_assistant_group_name")
+            assistant_group_department = st.selectbox("Department", DEPARTMENTS, key="creator_assistant_group_department")
+            assistant_group_semester = st.selectbox("Semester", ["Any semester", *range(1, 9)], key="creator_assistant_group_semester")
+            assistant_group_private = st.checkbox("Make this group private", key="creator_assistant_group_private")
+            assistant_group_submit = st.form_submit_button("Prepare group with AI", type="primary", disabled=not assistant_group_name.strip())
+        if assistant_group_submit:
+            try:
+                description = ai_group_description(assistant_group_name.strip(), assistant_group_department, assistant_group_semester, creator_ai_language)
+                st.session_state.creator_ai_admin_pending = {
+                    "kind": "Study group",
+                    "name": assistant_group_name.strip(),
+                    "department": assistant_group_department,
+                    "semester": assistant_group_semester,
+                    "is_private": assistant_group_private,
+                }
+                st.session_state.creator_ai_admin_review_body = description
+                st.rerun()
+            except Exception as exc:
+                st.error(f"The AI could not prepare this group: {str(exc)[:350]}")
+    else:
+        with st.form("creator_assistant_question_form"):
+            admin_question = st.text_area("Ask a question about managing CampusConnect", key="creator_assistant_question", placeholder="How do I highlight an important notice?")
+            ask_admin_ai = st.form_submit_button("Ask creator AI", type="primary", disabled=not admin_question.strip())
+        if ask_admin_ai:
+            try:
+                answer = creator_ai_generate_text(
+                    "You are the private CampusConnect Creator Studio assistant. Explain how to use the creator app in simple steps. "
+                    "You cannot access or change database records. Never claim an action has been saved, published, or deleted. "
+                    f"Reply in {creator_ai_language}.",
+                    admin_question.strip(),
+                )
+                st.session_state.creator_ai_admin_answer = answer
+            except Exception as exc:
+                st.error(f"The creator AI could not answer: {str(exc)[:350]}")
+        if st.session_state.get("creator_ai_admin_answer"):
+            st.markdown(st.session_state.creator_ai_admin_answer)
+
+    pending_admin = st.session_state.get("creator_ai_admin_pending")
+    if pending_admin:
+        st.divider()
+        st.subheader("Review the AI-prepared draft")
+        st.text_area("Edit the draft before continuing", key="creator_ai_admin_review_body", height=180)
+        if pending_admin["kind"] in ("Notice", "Activity"):
+            st.caption(f"{pending_admin['kind']} · {pending_admin['event_date']} · {pending_admin['audience']}")
+            st.button(
+                "Open in notice/activity editor →",
+                type="primary",
+                key="creator_ai_admin_review_post",
+                on_click=open_assistant_post_editor,
+            )
+        else:
+            st.caption(f"Study group · {pending_admin['department']} · {pending_admin['semester']}")
+            st.button(
+                "Open in group editor →",
+                type="primary",
+                key="creator_ai_admin_review_group",
+                on_click=open_assistant_group_editor,
+            )
 
 elif page == "Student inbox":
     st.caption("Private messages started by students from the red daily alert. Replies appear in their student app.")
