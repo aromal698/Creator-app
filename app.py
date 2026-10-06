@@ -708,6 +708,9 @@ def apply_theme():
     .stApp .st-key-theme_bulb button {{ background:#fff7d9 !important; color:#704f00 !important; border-color:#d6b66a !important; }}
     .stApp .st-key-student_manual_button button {{ background:{theme['surface']} !important; color:{theme['accent']} !important; border:1px solid {theme['border']} !important; border-radius:11px !important; min-width:42px; min-height:42px; padding:0 .45rem; font-size:1.35rem; box-shadow:0 2px 8px #00000012; }}
     .stApp [data-testid="stSidebar"] .st-key-student_profile_avatar_button button {{ width:48px; height:48px; min-height:48px; padding:0; border-radius:50%; background:{theme['accent']} !important; color:#fff !important; border:3px solid {theme['border']} !important; font-size:1.2rem; font-weight:800; box-shadow:0 3px 10px #163b2b22; }}
+    .stApp .st-key-floating_campus_bot {{ position:fixed; z-index:99998; right:1.25rem; bottom:1.25rem; width:64px; height:64px; }}
+    .stApp .st-key-floating_campus_bot button {{ width:60px; min-width:60px; height:60px; min-height:60px; padding:0; border-radius:50%; background:{theme['accent']} !important; border:3px solid {theme['surface']} !important; color:#fff !important; font-size:1.65rem; box-shadow:0 5px 18px #10251e55; }}
+    .stApp .st-key-floating_campus_bot button:hover {{ transform:translateY(-3px); box-shadow:0 8px 22px #10251e66; }}
     .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] {{ background:{theme['surface']} !important; border:1px solid {theme['border']} !important; border-left:4px solid transparent !important; color:{theme['text']} !important; }}
     .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; }}
     .stApp [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {{ background:{theme['soft']} !important; border-color:{theme['accent']} !important; border-left:4px solid {theme['accent']} !important; }}
@@ -946,6 +949,7 @@ with manual_cube:
     st.button("🧊", key="student_manual_button", on_click=toggle_student_manual, help="Open the simple student manual")
 with bulb:
     theme_control()
+st.button("🤖", key="floating_campus_bot", on_click=open_student_campus_bot, help="Open Campus Bot")
 
 if page != "Home":
     st.button("← Back to home", on_click=go_home)
