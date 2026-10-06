@@ -24,7 +24,7 @@ NAV_PAGES = ["Home", "Campus Bot", "Student Profile", "Study Groups", "Group Cha
 FREE_CLOUDFLARE_MODEL = "@cf/google/gemma-4-26b-a4b-it"
 FREE_GROQ_MODEL = "openai/gpt-oss-20b"
 NAV_PAGE_ICONS = {
-    "Home": "⌂", "Campus Bot": "🤖", "Student Profile": "👤", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
+    "Home": "⌂", "Campus Bot": "🧭", "Student Profile": "👤", "Study Groups": "👥", "Group Chat": "💬", "Chat with Creator": "✉️",
     "Campus Calendar": "📅", "Campus Activities": "🎪", "Notices": "📌",
     "AI Study Buddy": "✨", "AI Search": "🔎", "Feedback": "💡",
 }
@@ -949,7 +949,7 @@ with manual_cube:
     st.button("🧊", key="student_manual_button", on_click=toggle_student_manual, help="Open the simple student manual")
 with bulb:
     theme_control()
-st.button("🤖", key="floating_campus_bot", on_click=open_student_campus_bot, help="Open Campus Bot")
+st.button("🧭", key="floating_campus_bot", on_click=open_student_campus_bot, help="Open Campus Bot")
 
 if page != "Home":
     st.button("← Back to home", on_click=go_home)
@@ -1002,13 +1002,13 @@ if page == "Campus Bot":
                 if len(matches) == 1:
                     group = matches[0]
                     if group.get("is_private"):
-                        st.session_state.nav_page = "Study Groups"
+                        st.session_state._pending_nav_page = "Study Groups"
                         response_text = f"**{group['name']}** is private. Open **Study Groups → Join with code** and enter the invite code from its creator. I can't bypass the code."
                     else:
                         already_joined = client.table("group_members").select("group_id").eq("group_id", group["id"]).eq("user_id", uid).limit(1).execute().data or []
                         if already_joined:
                             st.session_state.active_group_id = group["id"]
-                            st.session_state.nav_page = "Group Chat"
+                            st.session_state._pending_nav_page = "Group Chat"
                             response_text = f"You already joined **{group['name']}**. Opening its chat."
                         else:
                             st.session_state.campus_bot_pending_action = {"kind": "join_group", "group_id": group["id"], "group_name": group["name"]}
@@ -1016,7 +1016,7 @@ if page == "Campus Bot":
                 elif len(matches) > 1:
                     response_text = "I found more than one matching group. Type the full group name after ‘join group’."
                 else:
-                    st.session_state.nav_page = "Study Groups"
+                    st.session_state._pending_nav_page = "Study Groups"
                     response_text = "I couldn't find that group name. The Study Groups page is open; you can browse groups or use the creator's code for a private group."
             except Exception:
                 response_text = "I couldn't load the groups just now. Open Study Groups and try again."
@@ -1050,7 +1050,7 @@ if page == "Campus Bot":
             ]
             target_page = next((page_name for aliases, page_name in page_aliases if any(alias in command for alias in aliases)), None)
             if target_page:
-                st.session_state.nav_page = target_page
+                st.session_state._pending_nav_page = target_page
                 response_text = f"Opening **{target_page}**."
             else:
                 response_text = "I can open Home, your profile, study groups, group chat, creator chat, calendar, activities, notices, AI Study Buddy, AI Search, or Feedback. I can also join a named public group, change the theme, choose a daily alert, or sign you out after confirmation."
@@ -1083,9 +1083,9 @@ if page == "Campus Bot":
                     client.table("student_daily_choices").insert({"user_id": uid, "choice_date": today_iso, "choice": choice}).execute()
                     st.session_state.pop("campus_bot_pending_action", None)
                     if choice == "red":
-                        st.session_state.nav_page = "Chat with Creator"
+                        st.session_state._pending_nav_page = "Chat with Creator"
                     else:
-                        st.session_state.nav_page = "Home"
+                        st.session_state._pending_nav_page = "Home"
                     st.rerun()
                 except Exception:
                     st.error("Today's alert could not be saved. It may already have been used today.")
@@ -1151,7 +1151,7 @@ elif page == "Home":
     with st.container(border=True):
         bot_home_left, bot_home_right = st.columns([4, 1])
         with bot_home_left:
-            st.markdown("#### 🤖 Campus Bot")
+            st.markdown("#### 🧭 Campus Bot")
             st.caption("Tell the bot what you want to do: open notices, find or join a group, open a chat, go to your profile, change the theme, or choose today's alert.")
         with bot_home_right:
             st.button("Open Campus Bot →", key="home_open_campus_bot", type="primary", on_click=open_student_campus_bot, use_container_width=True)
