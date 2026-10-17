@@ -155,8 +155,18 @@ def render_student_access_screen(client):
                         st.error("A profile already uses this registration number. Sign in with its password instead.")
                     elif "email not confirmed" in detail or "email_not_confirmed" in detail:
                         st.error("Supabase is asking for email confirmation. Turn off **Confirm email** under Supabase Authentication → Sign In / Providers → Email, then try again.")
+                    elif "email rate limit" in detail or "rate limit exceeded" in detail:
+                        st.error("Supabase's email limit was reached. Check that **Confirm email** is off in Authentication → Sign In / Providers → Email. If it is already off, wait for Supabase's limit window to reset before retrying.")
                     else:
-                        st.error("CampusConnect could not create the profile. Check that Supabase email sign-up is enabled, Confirm email is off, and the student app has the correct Supabase project URL and publishable/anon key in its Secrets.")
+                        safe_detail = str(signup_error)
+                        for secret_name in ("SUPABASE_ANON_KEY", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY"):
+                            secret_value = str(secret(secret_name, "")).strip()
+                            if secret_value:
+                                safe_detail = safe_detail.replace(secret_value, "[hidden Supabase key]")
+                        st.error(
+                            "CampusConnect could not create the profile. Check Supabase email sign-up and the project URL/key in this app's Secrets. "
+                            f"Supabase detail: {safe_detail[:300]}"
+                        )
 
 
 def get_authenticated_client():
